@@ -22,7 +22,3 @@ Here you can read how to install XMODE in Xiromos: https://github.com/xiromos/Xi
 
 - FAT16
 - VESA Video Mode: 1024x768px
-
-## How to build
-
-Here is a complete instruction: https://github.com/xiromos/XMODE
