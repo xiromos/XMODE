@@ -3,14 +3,15 @@
 ;Copyright (C) 2026 Technodon
 ;0x30
 ;AH = 0x01: print colored string
-;   SI: pointer to string
-;   EBX: color
+;   ESI: pointer to null-terminated string
+;   EBX: color (0x00RRGGBB)
 ;AH = 0x02: print a single character
 ;   AL: character
 ;   EBX: color (0x00RRGGBB)
 ;=======================================================
 
 output_handler:
+    pusha
     cmp ah, 0x01
     je .print_string
     cmp ah, 0x02
@@ -26,6 +27,7 @@ output_handler:
     call print_char
     jmp .print_string
 .done_print:
+    popa
     iret
 
 .print_char:
@@ -44,6 +46,7 @@ output_handler:
     cmp dword [cur_y], height
     jae .scroll
 .done:
+    popa
     iret
 .scroll:
     call scroll
@@ -55,4 +58,5 @@ output_handler:
     add dword [cur_y], 16
     cmp dword [cur_y], height
     jae .scroll
+    popa
     iret
