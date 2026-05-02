@@ -1,5 +1,6 @@
 code_off        equ 0x08
 data_off        equ 0x10
+code_off_user   equ (4*8) | 3
 vidmem          equ 0xb8000
 col             equ 80
 line            equ 25
@@ -22,7 +23,7 @@ scan_codes:
     db '-','=',8          ; Backspace
     db 9                 ; Tab
 
-    db 'q','w','e','r','t','y','u','i','o','p'
+    db 'q','w','e','r','t','z','u','i','o','p'
     db '[',']',13        ; Enter
 
     db 0                 ; Ctrl
@@ -30,7 +31,7 @@ scan_codes:
     db ';',"'",'`'
 
     db 0                 ; Left Shift
-    db '\','z','x','c','v','b','n','m'
+    db '\','y','x','c','v','b','n','m'
     db ',', '.', '/'
 
     db 0                 ; Right Shift
@@ -54,11 +55,11 @@ scan_codes:
 keymap_shift:
     db 0, 27, '!','@','#','$','%','^','&','*','(',')','_','+', 8
     db 9
-    db 'Q','W','E','R','T','Y','U','I','O','P','{','}', 13
+    db 'Q','W','E','R','T','Z','U','I','O','P','{','}', 13
     db 0
     db 'A','S','D','F','G','H','J','K','L',':','"','~'
     db 0
-    db '|','Z','X','C','V','B','N','M','<','>','?'
+    db '|','Y','X','C','V','B','N','M','<','>','?'
     db 0
     db '*'
     db 0
@@ -94,6 +95,8 @@ cur_y: dd 0
 color: dd 0
 bgcolor: dd 0
 user_stack  equ 0x95000
+program_stack   equ 0xa0000
+kernel_stack dd 0
 tss:
     dd 0    ; dd prev_tss
     dd 0   ; dd esp0
@@ -160,15 +163,17 @@ data_start: dw 0
 
 root_addr       equ 0
 fat_addr        equ 0x4000
+program_addr    equ 0x50000
 
 dir_str: db '<DIR>', 0
-read_buffer: db 0 dup(13)
-read_buffer2: db 0 dup(13)
-read_buffer3: db 0 dup(11)
+read_buffer: times 13 db 0
+read_buffer2: times 13 db 0
+read_buffer3: times 11 db 0
 file_buffer     equ 0x20000
 cluster16: dw 0
 first_cluster16: dw 0
 file_size16: dd 0
+prev_cluster16: dw 0
 
 read_error_msg: db 'Error while reading file', 0
 
@@ -180,3 +185,7 @@ ren_err_msg: db 'Error while renaming file. File might be corrupted', 0
 
 write_success: db 'File saved!', 0
 write_failure: db 'Error while writing file. Disk might be corrupted', 0
+write_prompt: db 'Enter file content (ESC = save):', 0
+
+file_test_txt db        "TEST    TXT"
+program_help_bin db     "HELP    BIN"
