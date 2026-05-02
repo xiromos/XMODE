@@ -101,13 +101,62 @@ exec_cmd:
     mov esi, write_str
     call cmp_str
     jc .write_file
+
+    jmp .exec_program
+    ret
+.exec_program:
+    mov esi, [argument]
+    mov edi, read_buffer2
+    xor ecx, ecx
+    call parse_arg_loop
+
+    mov edi, command_buffer
+    mov ecx, 11
+.prep_buffer:
+    cmp byte [edi], 0
+    je .clear_full
+    inc edi
+    dec ecx
+    jnz .prep_buffer
+    jmp .load_program
+.clear_full:
+    mov byte [edi], 0x20    ;space
+    inc edi
+    dec ecx
+    jnz .clear_full
+.load_program:
+    mov edi, command_buffer+8
+    mov byte [edi], 'B'
+    mov byte [edi+1], 'I'
+    mov byte [edi+2], 'N'
+
+    mov esi, command_buffer
+    mov edi, read_buffer
+    mov ecx, 11
+    repe movsb
+
+    mov ah, 0x08
+    mov edi, program_addr
+    mov esi, read_buffer
+    int 0x33
+    jc .exec_prog_err
+    
+    mov esi, read_buffer2
+    mov [kernel_stack], esp
+    mov esp, program_stack
+    call far code_off_user:program_addr
+    mov esp, [kernel_stack]
+    ret
+.exec_prog_err:
     ret
 .show_help:
-    mov esi, help_msg
-    mov ah, 0x01
-    int 0x30
-    mov ah, 0x03
-    int 0x30
+    mov esi, program_help_bin
+    mov edi, program_addr
+    mov ah, 0x08
+    int 0x33
+    jc .exec_prog_err
+
+    call far code_off_user:program_addr
     ret
 
 .clear_screen:
@@ -195,12 +244,11 @@ exec_cmd:
     je .ren_handle_backspace
     
     dec ecx
-    cmp ecx, 0
-    je .rename_loop_lmt
+    jz .rename_loop_lmt
 
+    stosb
     mov ebx, 0x00ffffff
     call print_char
-    stosb
     jmp .rename_loop
 
 .ren_done:
@@ -208,16 +256,7 @@ exec_cmd:
     mov esi, read_buffer2
     mov edi, read_buffer3
     xor ecx, ecx
-    call parse_arg.parse_arg_loop
-
-    pusha
-    mov esi, read_buffer
-    mov ecx, 11
-    call print_buffer
-    mov esi, read_buffer2
-    mov ecx, 11
-    call print_buffer
-    popa
+    call parse_arg_loop
 
     mov ah, 0x04
     mov esi, read_buffer
@@ -232,11 +271,13 @@ exec_cmd:
     cmp dword [cur_x], 0
     je .rename_loop
     dec edi
+    mov al, 0x20
+    stosb
+    dec edi
     sub dword [cur_x], 8
     mov ebx, [bgcolor]
     mov al, 0xff
-    mov ah, 0x02
-    int 0x30
+    call print_char
     sub dword [cur_x], 8
     jmp .rename_loop
 .rename_error:
@@ -254,23 +295,33 @@ exec_cmd:
     ret
 
 .write_file:
-    mov esi, argument
+    mov esi, [argument]
     mov edi, read_buffer
     call clear_buffer
     call parse_arg
-    mov ecx, 1000     ;test
+
+    mov esi, write_prompt
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+
+    mov edi, file_buffer
+    call get_text
+
     mov esi, read_buffer
-    mov edi, 0x8000
+    mov edi, file_buffer
     mov ah, 0x03
     int 0x33
     jc .write_error
 
+    call print_newline
     mov esi, write_success
     mov ebx, COLOR_GREEN
     call print_string
     call print_newline
     ret
 .write_error:
+    call print_newline
     mov esi, write_failure
     mov ebx, COLOR_RED
     call print_string
@@ -419,10 +470,11 @@ hex_string_done:
 
 
 parse_arg:
-    pusha
     xor ecx, ecx
     mov esi, [argument]      ;pointer to argument (filename)
     mov edi, read_buffer
+parse_arg_loop:
+    pusha
 .parse_arg_loop:
     mov al, [esi]
     cmp al, 0       ;check for 0-terminator
@@ -513,3 +565,62 @@ print_buffer:
     jz .done
     call print_newline
     jmp print_buffer
+
+
+get_text:
+    xor ecx, ecx
+.loop:
+    xor ah, ah
+    int 0x31
+    cmp al, 0x1b        ;escape
+    je .done
+    cmp al, 0x09        ;tab
+    je .tab
+    cmp al, 0x08
+    je .handle_backspace
+    cmp al, 0x0d
+    je .newline
+
+    stosb
+    mov ebx, 0x00ffffff
+    call print_char
+    inc ecx
+    jmp .loop
+.tab:
+    mov al, 0x20
+    push ecx
+    mov ecx, 4
+    repe stosb
+    mov ecx, 4
+    mov ebx, 0x00ffffff
+.space:
+    call print_char
+    dec ecx
+    jnz .space
+    pop ecx
+    add ecx, 4
+    jmp .loop
+.done:
+    ret
+
+.handle_backspace:
+    cmp ecx, 0
+    jbe .loop
+    cmp dword [cur_x], 0
+    je .loop
+    sub dword [cur_x], 8
+    mov al, 0xff
+    call print_char
+    sub dword [cur_x], 8
+    dec edi
+    mov al, 0x20
+    stosb
+    dec edi
+    dec ecx
+    jmp .loop
+.newline:
+    call print_newline
+    mov al, 0x0a
+    stosb
+    inc ecx
+    jmp .loop
