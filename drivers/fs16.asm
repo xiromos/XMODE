@@ -5,7 +5,9 @@
 ;AH = 0x03: write a file to disk                            input: ESI = filename, ECX = filesize (bytes), EDI = buffer     output: CF if error
 ;AH = 0x04: rename a file                                   input: ESI = old filename, EDI = new filename                   output: CF if error
 ;AH = 0x05: delete a file                                   input: ESI = filename                                           output: CF if error
-;AH = 0x06: copy a file from root to root or from dir to subdir     input: ESI = filename, EDI = directory                  output: CF if error
+;AH = 0x06: copy file from dir to subdir                    input: ESI = filename, EDI = directory                          output: CF if error
+;AH = 0x07: copy file to another disk
+;AH = 0x08: load program into memory                        input: ESI = program name, EDI = adress in memory               output: CF if error
 ;---------------------------------------------------------------------
 ;Copyright (C) 2026 Technodon
 ;=====================================================================
@@ -99,10 +101,16 @@ fs16_handler:
     je fs16_get_file_list
     cmp ah, 0x02
     je fs16_read_file
+    cmp ah, 0x03
+    je fs16_write_file
     cmp ah, 0x04
     je fs16_rename_file
     cmp ah, 0x05
     je fs16_delete_file
+    cmp ah, 0x06
+    je fs16_copy_file
+    cmp ah, 0x08
+    je fs16_load_program
     iret
  
 fs16_get_file_list:
@@ -184,16 +192,14 @@ fs16_read_file:
 .load:
     mov ax, [cluster16]
     call cluster_to_sec
-    xor ecx, ecx
-    mov cx, ax
+    movzx ecx, ax
 
     mov ah, 0x02
-    xor ebx, ebx
-    mov bl, [sec_per_cluster]
+    movzx ebx, byte [sec_per_cluster]
     int 0x32
 
     mov eax, 512
-    mul ecx
+    mul ebx
     add edi, eax
 
     mov bx, [cluster16]
@@ -215,10 +221,9 @@ fs16_read_file:
 ;======================write file======================================
 fs16_write_file:
     pusha
-    push esi
-    push ecx
     push edi
     mov [file_size16], ecx
+    mov [argument], esi
     mov edi, root_addr
     mov dx, [root_entries]
 .search_loop:
@@ -233,8 +238,6 @@ fs16_write_file:
     jnz .search_loop
 
     pop edi
-    pop ecx
-    pop esi
     popa
     or dword [esp+8], 1
     iret
@@ -242,7 +245,7 @@ fs16_write_file:
 .free_entry:
     mov eax, edi
     pop edi
-    pop ecx
+    mov ecx, [file_size16]
     push eax        ;save root adress
 
     mov eax, 512
@@ -278,78 +281,75 @@ fs16_write_file:
     jnz .first_cluster
 .found_first_cluster:
     mov [first_cluster16], ax
-
+    mov [prev_cluster16], ax
     dec ecx
     jz .one_cluster
-
-    inc eax
-    push eax
-    movzx eax, word [first_cluster16]
-    shl ax, 1
-    mov esi, fat_addr
-    add esi, eax
-    pop eax
-    mov ebx, eax
+    inc ecx
 .loop:
-    mov eax, ebx
+    mov bx, ax
     shl bx, 1
     cmp [edi+ebx], 0
     je .next_cluster
-    mov ebx, eax
-    inc ebx
+    inc ax
     dec edx
     jnz .loop
     jmp .error
 .next_cluster:
-    mov ebx, eax
-    mov [esi], bx
-    push ebx
+    mov bx, [prev_cluster16]
     shl bx, 1
-    mov esi, fat_addr
-    add esi, ebx
-    pop ebx
-    mov ebx, eax
+    mov [edi+ebx], ax
+    mov [prev_cluster16], ax
 
     pop edi
+    push eax
     push ecx
     push ebx
-    mov eax, ebx
     call cluster_to_sec
     mov ecx, eax
     movzx ebx, byte [sec_per_cluster]
-    imul ebx, 512
+    mov esi, edi
     mov ah, 0x03
     int 0x32
+
+    imul ebx, 512
+    add edi, ebx
+
     pop ebx
     pop ecx
-    push edi
-    jc .error
+    pop eax
 
+    push edi
+    mov edi, fat_addr
+    jc .error
+    inc ax
     dec ecx
     jnz .loop
     jmp .last_cluster
 .one_cluster:
     mov word [edi+ebx], 0xfff8
-    mov ecx, ebx
+    movzx eax, word [first_cluster16]
+    call cluster_to_sec
+    movzx ecx, ax
     movzx ebx, byte [sec_per_cluster]
     pop edi
+    mov esi, edi
     mov ah, 0x03
     int 0x32
     jnc .done
 .error:
     pop eax
-    pop esi
     popa
     or dword [esp+8], 1
     iret
 .last_cluster:
-    mov ax, 0xfff8
+    mov bx, [prev_cluster16]
     shl bx, 1
-    mov [fat_addr+bx], ax
+    mov word [fat_addr+bx], 0xfff8
+    pop edi
 .done:
+    mov esi, [argument]
     pop eax
     mov edi, eax
-    pop esi
     call fs16_write_fat
 
     mov ecx, 11
@@ -363,7 +363,6 @@ fs16_write_file:
     mov ecx, [file_size16]
     mov [edi+0x1c], ecx
     call fs16_write_root
-
     popa
     and dword [esp+8], 0xfffffffe
     iret
@@ -452,4 +451,103 @@ fs16_rename_file:
 
     popa
     and dword [esp+8], 0xfffffffe
+    iret
+
+;==========================copy file===============================
+fs16_copy_file:
+    pusha
+    push edi
+    mov edi, root_addr
+    mov dx, [root_entries]
+.search_loop:
+    mov ecx, 11
+    push esi
+    push edi
+    repe cmpsb
+    pop edi
+    pop esi
+    je .found
+
+    add edi, 32
+    dec dx
+    jnz .search_loop
+
+    pop edi
+    popa
+    or dword [esp+8], 1
+    iret
+.found:
+    mov esi, edi
+    mov edi, file_buffer
+    mov ecx, 32
+.loop:
+    lodsb
+    stosb
+    dec ecx
+    jnz .loop
+
+    ;load the directory...
+    pop edi
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+
+;============load program=====================
+fs16_load_program:
+    pusha
+    push edi
+    mov edi, root_addr
+    mov dx, [root_entries]
+.search_loop:
+    mov ecx, 11
+    push esi
+    push edi
+    repe cmpsb
+    pop edi
+    pop esi
+    je .found
+
+    add edi, 32
+    dec dx
+    jnz .search_loop
+
+    pop edi
+    popa
+    or dword [esp+8], 1
+    iret
+.found:
+    mov ax, [edi+0x1a]
+    mov [cluster16], ax
+
+    pop edi
+.loop:
+    movzx eax, word [cluster16]
+    call cluster_to_sec
+    mov ecx, eax
+    movzx ebx, byte [sec_per_cluster]
+    mov ah, 0x02
+    int 0x32
+    jc .error
+
+    mov eax, 512
+    imul eax, ebx
+    add edi, eax
+
+    mov ax, [cluster16]
+    shl ax, 1
+    movzx ebx, ax
+    mov eax, [fat_addr+ebx]
+    mov [cluster16], ax
+
+    cmp ax, 2
+    jb .error
+    cmp ax, 0xfff8
+    jb .loop
+
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+.error:
+    popa
+    or dword [esp+8], 1
     iret
