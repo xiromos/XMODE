@@ -127,6 +127,7 @@ tss:
     dw 0   ; dw iomap_base
 .end:
 hex4_out: db '0x0000', 0
+hex8_out: db '0x00000000', 0
 ;commands
 help_msg: db 'In progress...', 0
 help_str: db 'help', 0
@@ -138,7 +139,7 @@ rename_str: db 'rename', 0
 write_str: db 'write', 0
 command_buffer: db 0 dup(50)
 ;disk
-fs_loading_str: db 'Loading FAT16...', 0
+fs_loading_str: db '> Loading FAT16...', 0
 disk_lba:           ;extended read/write needs a structure which points to the LBA
     db 0
     db 0
@@ -146,8 +147,16 @@ disk_lba:           ;extended read/write needs a structure which points to the L
     db 0
     db 0
     db 0
-
-;filesystem
+prdt:
+    dd 0x00005000            ;buffer
+    dw 512                   ;sector size
+    dw 0x8000
+pci_bus: db 0
+pci_device: db 0
+pci_function: db 0
+bm_base: dd 0
+bm_base4: dw 0
+cur_bmbase_str: db '< BM Base: ', 0
 sec_per_cluster: db 0
 reserved_sectors: dw 0
 fat_num: db 0
@@ -156,16 +165,19 @@ total_sectors: dw 0
 fat_size: dw 0
 hidden_sectors: dd 0
 total_sectors32: dd 0
+bytes_per_sec: dw 0
 
 root_start: dw 0
 root_sectors: dw 0
 data_start: dw 0
+subdir_entries: dw 0
 
 root_addr       equ 0
 fat_addr        equ 0x4000
 program_addr    equ 0x50000
 
 dir_str: db '<DIR>', 0
+sys_str: db '<SYS>', 0
 read_buffer: times 13 db 0
 read_buffer2: times 13 db 0
 read_buffer3: times 11 db 0
@@ -178,13 +190,13 @@ prev_cluster16: dw 0
 read_error_msg: db 'Error while reading file', 0
 
 del_success_msg: db 'File deleted', 0
-delete_failure_msg: db 'Error while deleting file. Disk corrupted', 0
+delete_failure_msg: db 'Error while deleting file', 0
 
 ren_prompt: db 'Enter new filename: ', 0
-ren_err_msg: db 'Error while renaming file. File might be corrupted', 0
+ren_err_msg: db 'Error while renaming file', 0
 
 write_success: db 'File saved!', 0
-write_failure: db 'Error while writing file. Disk might be corrupted', 0
+write_failure: db 'Error while writing file', 0
 write_prompt: db 'Enter file content (ESC = save):', 0
 
 file_test_txt db        "TEST    TXT"
