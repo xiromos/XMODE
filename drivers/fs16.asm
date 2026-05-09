@@ -136,10 +136,18 @@ fs16_get_file_list:
 
     cmp byte [esi+0xb], 0x10
     je .dir
+    cmp byte [esi+0xb], 0x24
+    je .system
 
     mov al, '#'
     stosb
     jmp .continue
+.system:
+    mov al, '%'
+    stosb
+    mov al, 0x0a
+    stosb
+    jmp .free_entry
 .dir:
     mov al, '*'
     stosb
@@ -166,7 +174,7 @@ fs16_read_file:
     mov edi, root_addr
     mov dx, [root_entries]
 .loop:
-    mov cx, 11
+    mov ecx, 11
     push esi
     push edi
     repe cmpsb
