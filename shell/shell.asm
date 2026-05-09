@@ -378,6 +378,8 @@ print_buffer_ls:
     je .print_size
     cmp al, '*'
     je .print_dir
+    cmp al, '%'
+    je .print_sys
     cmp al, 0x0a
     je .newline
     cmp al, '$'
@@ -401,6 +403,14 @@ print_buffer_ls:
     call print_char
     push esi
     mov esi, dir_str
+    call print_string
+    pop esi
+    jmp print_buffer_ls
+.print_sys:
+    mov al, ' '
+    call print_char
+    push esi
+    mov esi, sys_str
     call print_string
     pop esi
     jmp print_buffer_ls
@@ -468,6 +478,35 @@ print_hex_string:
 hex_string_done:
     ret
 
+print_hex8:
+    pusha
+    mov ecx, 8       ;counter to print 4 chars !!!!change it to print less or more chars!!!!
+.char_loop:
+    dec ecx
+
+    mov eax, edx      ;copy dx
+    shr edx, 4       ;shift 4 bits to the right
+    and eax, 0xf     ;mask ah to get the last 4 bits
+
+    mov esi, hex8_out;memory adress of the string
+    add esi, 2       ;skip the 0x
+    add esi, ecx      ;add counter to adress
+
+    cmp eax, 0xa     ;check if its a letter or a number
+    jl .set_letter   ;if its a number, go to set the value
+    add al, 0x27    ;ASCII letters start at 0x61 for 'a'
+    jl .set_letter
+.set_letter:
+    add al, 0x30    ;ASCII number
+    mov byte [esi], al   ;add the value of the char at bx
+    cmp ecx, 0       ;check the counter
+    je .print_hex_done
+    jmp .char_loop
+.print_hex_done:
+    mov ebx, hex8_out
+    call print_hex_string
+    popa
+    ret
 
 parse_arg:
     xor ecx, ecx
