@@ -7,6 +7,8 @@
 ;AH = 0x04: get drive information
 ;AH = 0x0A: read a sector from the disk with extended LBA       (EBX = sector count, EDI = adress in memory, ECX = pointer to LBA struct)
 ;AH = 0x0B: write a sector to the disk with extended LBA        (EBX = sector count, EDI = pointer to buffer in memory, ECX = pointer to LBA)
+;AH = 0x12: read sectors with DMA
+;AH = 0x13: write sectors with DMA
 ;----------------------------------------------------------------
 ;0x1F0 = Data
 ;0x1F2 = Sector count
@@ -29,6 +31,10 @@ diskio_handler:
     je .read_sectors
     cmp ah, 0x0b
     je .write_sectors
+    cmp ah, 0x12
+    je read_dma
+    cmp ah, 0x13
+    je write_dma
     stc
     iret
 
@@ -583,3 +589,99 @@ reset_ata:
     pop eax
     ret
 ;================================================================
+;EBX = sector count, ECX = LBA, EDI = buffer
+read_dma:
+    pusha
+    ;stop DMA
+    mov dx, [bm_base4]
+    xor al, al
+    out dx, al
+
+    ;clear status
+    mov dx, [bm_base4]
+    add dx, 2
+    in al, dx
+    or al, 0x06
+    out dx, al
+
+    ;set PRDT
+    mov dx, [bm_base4]
+    add dx, 4
+    mov eax, prdt
+    out dx, eax
+.wait:
+    mov dx, 0x1f7
+    in al, dx
+    test al, 0x80
+    jnz .wait
+    
+    mov dx, 0x1f6
+    mov al, 0xe0       ;Master + LBA
+    out dx, al
+
+    mov dx, 0x1f2
+    mov al, 1           ; 1 sector
+    out dx, al
+
+    mov dx, 0x1f3
+    mov al, 1
+    out dx, al
+
+    mov dx, 0x1f4
+    mov al, 0
+    out dx, al
+
+    mov dx, 0x1f5
+    out dx, al
+
+    mov dx, 0x1f7   ;set command
+    mov al, 0xc8    ;read DMA 28bit LBA
+    out dx, al
+.wait_rdy:
+    in al, dx
+    test al, 0x80
+    jnz .wait_rdy
+
+    test al, 0x08
+    jnz .continue
+
+    test al, 0x01
+    jnz .error
+
+    jmp .wait_rdy
+.continue:
+    mov dx, [bm_base4]
+    mov al, 0x09
+    out dx, al
+    
+    mov dx, [bm_base4]
+    add dx, 2
+.wait_dma:
+    in al, dx
+    test al, 0x04
+    jz .wait_dma
+
+    ;stop DMA
+    mov dx, [bm_base4]
+    mov al, 0
+    out dx, al
+    
+    ;test if error
+    mov dx, [bm_base4]
+    add dx, 2
+    in al, dx
+    test al, 0x02
+    jnz .error
+    
+    mov esi, 0x5000
+    mov edx, [esi]
+    call print_hex8
+    popa
+    iret
+.error:
+    mov al, '!'
+    call print_char
+    popa
+    iret
+write_dma:
+    iret
