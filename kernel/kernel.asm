@@ -11,7 +11,7 @@ start:
     mov [hidden_sectors], eax
 
     mov ax, 0x4F02
-    mov bx, 0x4118   ; 1024x768x32bit
+    mov bx, 0x4118   ; 1024x768x24bit
     int 0x10
     ;mov ax, 0x03
     ;int 0x10
@@ -124,14 +124,24 @@ main:
     mov esi, idt_loaded_msg
     call print_string
     call print_newline
-
     ; disk read
     ; mov ah, 0x01
     ; mov edi, 0x15000
     ; mov ecx, 100
     ; mov ebx, 255
     ; int 0x32
+    mov esi, cur_bmbase_str
+    mov ebx, 0x00ffffff
+    call print_string
 
+    call scan_disk_pci
+    movzx edx, word [bm_base4]
+    call print_hex8
+    call print_newline
+    call ata_identify
+
+    mov ah, 0x12
+    ;int 0x32
     call get_bpb_data
 
     mov ax, [root_entries]
@@ -170,6 +180,13 @@ main:
     call load_root
     call load_fat
 
+    movzx eax, byte [sec_per_cluster]
+    movzx ebx, word [bytes_per_sec]
+    mul ebx 
+
+    mov ebx, 32
+    div ebx
+    mov [subdir_entries], ax
     mov ebx, 0x00ffffff
     mov esi, start_msg
     mov ah, 0x01
@@ -263,7 +280,9 @@ get_bpb_data:
     mov ecx, disk_lba
     mov ebx, 1        ;sector count
     int 0x32
-
+    
+    mov ax, [0x7c00+11]
+    mov [bytes_per_sec], ax
     mov al, [0x7c00+13]
     mov [sec_per_cluster], al
     mov ax, [0x7c00+14]
@@ -308,6 +327,167 @@ load_fat:
     int 0x32
     jc disk_error
     ret
+
+
+scan_disk_pci:
+    xor ebx, ebx
+.bus_loop:
+    cmp byte [pci_bus], 255
+    jae .done
+    mov byte [pci_device], 0
+.device_loop:
+    cmp byte [pci_device], 32
+    jae .next_bus
+    mov byte [pci_function], 0
+.function_loop:
+    cmp byte [pci_function], 8
+    jae .next_device
+
+    mov eax, 0x80000000
+    movzx ebx, byte [pci_bus]
+    shl ebx, 16
+    or eax, ebx
+
+    movzx ebx, byte [pci_device]
+    shl ebx, 11
+    or eax, ebx
+
+    movzx ebx, byte [pci_function]
+    shl ebx, 8
+    or eax, ebx
+
+    push eax
+    call pci_read
+    pop eax
+
+    cmp ax, 0xffff
+    je .skip
+
+    mov ecx, eax
+    or eax, 0x08
+    call pci_read
+    mov ebx, eax
+    mov eax, ecx
+
+    mov edx, ebx
+    shr edx, 24
+    cmp dl, 0x01
+    jne .skip
+
+    mov edx, ebx
+    shr edx, 16
+    cmp dl, 0x6     ;AHCI
+    je .found
+    cmp dl, 0x01
+    je .found       ;IDE
+    jmp .skip
+.found:
+    mov eax, 0x80000000
+    movzx ebx, byte [pci_bus]
+    shl ebx, 16
+    or eax, ebx
+
+    movzx ebx, byte [pci_device]
+    shl ebx, 11
+    or eax, ebx
+
+    movzx ebx, byte [pci_function]
+    shl ebx, 8
+    or eax, ebx
+
+    mov ecx, eax
+    or eax, 0x04
+    call pci_read
+    or eax, 0x0005  ;IO + bus master
+    mov ebx, eax
+    mov eax, ecx
+    or eax, 0x04
+    call pci_write
+
+    call read_bar4
+    jmp .done
+.next_device:
+    inc byte [pci_device]
+    jmp .device_loop
+.skip:
+    inc byte [pci_function]
+    jmp .function_loop
+.next_bus:
+    inc byte [pci_bus]
+    jmp .bus_loop
+.done:
+    ret
+pci_read:
+    ;EAX = PCI adress
+    mov dx, 0xcf8
+    out dx, eax
+    mov dx, 0xcfc
+    in eax, dx
+    ; push eax
+    ; mov edx, eax
+    ; call print_hex4
+    ; pop eax
+    ; hlt
+    ret
+pci_write:
+    ;EAX = PCI adress
+    ;EBX = content
+    mov dx, 0xcf8
+    out dx, eax
+
+    mov dx, 0xcfc
+    mov eax, ebx
+    out dx, eax
+    ret
+read_bar4:
+    mov eax, 0x80000000
+    movzx ebx, byte [pci_bus]
+    shl ebx, 16
+    or eax, ebx
+
+    movzx ebx, byte [pci_device]
+    shl ebx, 11
+    or eax, ebx
+
+    movzx ebx, byte [pci_function]
+    shl ebx, 8
+    or eax, ebx
+
+    or eax, 0x20
+    call pci_read
+
+    test eax, 1
+    jnz .io
+    xor eax, eax
+    ret
+.io:
+    and eax, 0xfffffffc
+    mov [bm_base], eax
+    mov [bm_base4], ax
+    ret
+
+ata_identify:
+    mov dx, 0x1f6
+    mov al, 0xe0
+    out dx, al
+
+    mov dx, 0x1f7
+    mov al, 0xec
+    out dx, al
+.wait:
+    in al, dx
+    test al, 0x80
+    jnz .wait
+
+    test al, 0x08
+    jz .wait
+
+    mov ecx, 256
+    mov dx, 0x1f0
+.read:
+    in ax, dx
+    dec ecx
+    jnz .read
     ret
 %include "/home/technodon/Downloads/xmode/data/data.asm"
 %include "/home/technodon/Downloads/xmode/data/font.asm"
@@ -323,8 +503,8 @@ font8x16:
 disk_error_msg: db 'Disk Read Error', 0
 
 ;memory map
-;0x0000 - 0x4000: root directory
-;0x4000 - 0x7c00: FAT
-;0x7c00 - 0x8000: boot sector
-;0x8000 - 0x20000: kernel
-;0x20000 - 0xXXXXX: programs
+;0x0000 - 0x4000:      root directory
+;0x4000 - 0x7c00:      FAT
+;0x7c00 - 0x8000:      boot sector
+;0x8000 - 0x50000:     kernel
+;0x95000 - 0xffffffff: programs
