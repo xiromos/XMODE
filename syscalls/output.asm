@@ -8,6 +8,9 @@
 ;AH = 0x02: print a single character
 ;   AL: character
 ;   EBX: color (0x00RRGGBB)
+;AH = 0x03: newline
+;AH = 0x04: print decimal number
+;   EBX: number
 ;=======================================================
 
 output_handler:
@@ -18,6 +21,9 @@ output_handler:
     je .print_char
     cmp ah, 0x03
     je .print_newline
+    cmp ah, 0x04
+    je .print_dec
+    popa
     iret
 .print_string:
     mov [color], ebx
@@ -58,5 +64,24 @@ output_handler:
     add dword [cur_y], 16
     cmp dword [cur_y], height
     jae .scroll
+    popa
+    iret
+.print_dec:
+    mov eax, ebx
+    xor ecx, ecx
+    mov ebx, 10
+.div_loop:
+    xor edx, edx
+    div ebx
+    push edx
+    inc ecx
+    cmp eax, 0
+    jne .div_loop
+.print_loop:
+    pop eax
+    add al, '0'
+    mov ebx, 0x00ffffff
+    call print_char
+    loop .print_loop
     popa
     iret
