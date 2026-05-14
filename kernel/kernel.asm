@@ -254,7 +254,7 @@ remap_pic:
     mov al,01h              ; ICW4
     out 21h,al              ; First PIC
     out 0A1h,al             ; Second PIC
-    
+
     pop eax
     
     ret
@@ -497,7 +497,6 @@ ata_identify:
 %include "/home/technodon/Downloads/xmode/syscalls/idt.asm"
 %include "/home/technodon/Downloads/xmode/shell/shell.asm"
 %include "/home/technodon/Downloads/xmode/drivers/fs16.asm"
-%include "/home/technodon/Downloads/xmode/syscalls/disk.asm"
 font8x16:
     incbin "/home/technodon/Downloads/xmode/data/DEFAULT.FNT"
 disk_error_msg: db 'Disk Read Error', 0
