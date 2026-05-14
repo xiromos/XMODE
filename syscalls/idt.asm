@@ -175,6 +175,10 @@ set_idt:
     mov ebx, 0x21
     call set_idt_entry
 
+    mov eax, irq14_handler
+    mov ebx, 0x2e
+    call set_idt_entry
+
     mov eax, output_handler
     mov ebx, 0x30
     call set_idt_entry
@@ -189,6 +193,10 @@ set_idt:
 
     mov eax, fs16_handler
     mov ebx, 0x33
+    call set_idt_entry
+
+    mov eax, window_functions
+    mov ebx, 0x34
     call set_idt_entry
     ret
 
@@ -216,3 +224,6 @@ isr_default:
     mov [cur_x], ebx
     popa
     iret
+
+%include "/home/technodon/Downloads/xmode/syscalls/disk.asm"
+%include "/home/technodon/Downloads/xmode/syscalls/windowmngr.asm"
