@@ -147,6 +147,7 @@ disk_lba:           ;extended read/write needs a structure which points to the L
     db 0
     db 0
     db 0
+align 4
 prdt:
     dd 0x00005000            ;buffer
     dw 512                   ;sector size
@@ -156,6 +157,7 @@ pci_device: db 0
 pci_function: db 0
 bm_base: dd 0
 bm_base4: dw 0
+dma_done: db 0
 cur_bmbase_str: db '< BM Base: ', 0
 sec_per_cluster: db 0
 reserved_sectors: dw 0
@@ -174,7 +176,7 @@ subdir_entries: dw 0
 
 root_addr       equ 0
 fat_addr        equ 0x4000
-program_addr    equ 0x50000
+program_addr    equ 0x100000
 
 dir_str: db '<DIR>', 0
 sys_str: db '<SYS>', 0
@@ -201,3 +203,22 @@ write_prompt: db 'Enter file content (ESC = save):', 0
 
 file_test_txt db        "TEST    TXT"
 program_help_bin db     "HELP    BIN"
+
+
+;windows and multitasking
+windows_list:
+    times 10 db 0
+num_windows: dw 0
+window_id: dw 0
+win_x: dd 0
+win_y: dd 0
+win_width: dd 0
+win_height: dd 0
+win_color: dd 0
+win_border_color: dd 0x001015c2
+untitled_str: db 'untitled', 0
+
+char_bgcolor: dd 0
+win_pitch: dd 0
+win_rows: dd 0
+cust_height: dd 0
