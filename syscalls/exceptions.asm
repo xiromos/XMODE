@@ -271,3 +271,24 @@ keyboard_handler:
 
 irq12_handler:
     iret
+
+irq14_handler:
+    pusha
+    mov byte [dma_done], 1
+
+    ;read IDE status
+    mov dx, 0x1f7
+    in al, dx
+
+    mov dx, [bm_base4]
+    add dx, 2
+    in al, dx
+
+    mov al, 0x04
+    out dx, al
+
+    mov al, 0x20
+    out 0xa0, al
+    out 0x20, al
+    popa
+    iret
