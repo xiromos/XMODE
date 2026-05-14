@@ -2,7 +2,7 @@
 ;Copyright (C) 2026 Technodon
 
 
-[org 0x50000]
+[org 0x100000]
 bits 32
 
 start:
