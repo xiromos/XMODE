@@ -614,7 +614,7 @@ read_dma:
     in al, dx
     test al, 0x80
     jnz .wait
-    
+
     mov dx, 0x1f6
     mov al, 0xe0       ;Master + LBA
     out dx, al
@@ -656,10 +656,12 @@ read_dma:
     
     mov dx, [bm_base4]
     add dx, 2
+    mov byte [dma_done], 0
 .wait_dma:
-    in al, dx
-    test al, 0x04
-    jz .wait_dma
+    ; in al, dx
+    ; test al, 0x01
+    cmp byte [dma_done], 1
+    jne .wait_dma
 
     ;stop DMA
     mov dx, [bm_base4]
