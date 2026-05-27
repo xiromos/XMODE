@@ -11,6 +11,8 @@ start:
     mov ah, 0x01
     int 0x34
 
+    mov [window_id], ax
+
     ; clear window
     ; mov ah, 0x0e
     ; mov edi, window_packet
@@ -70,10 +72,13 @@ start:
     jmp .get_input
 
 .handle_backspace:
-    push edi
     cmp ecx, 0
     jbe .get_input
+    mov eax, [window_packet+24]
+    cmp dword [window_packet+16], eax
+    jbe .get_input
     sub dword [window_packet+16], 8
+    push edi
     mov al, 0xff
     mov ah, 0x0b
     mov edi, window_packet
@@ -131,7 +136,13 @@ start:
     int 0x30
     jmp .loop
 .quit:
-    retf
+    mov ah, 0x02
+    mov bx, [window_id]
+    mov edi, window_packet
+    int 0x34
+    
+    mov ah, 0x05        ;exit syscall
+    int 0x35
 
 
 cmp_cmd:
@@ -178,4 +189,7 @@ no_cmd: db 'Not a known command', 0
 
 help_msg: db 'Help', 0x0a,
           db 'HELP: show this message', 0x0a,
-          db 'CLEAR: clear screen', 0
+          db 'CLEAR: clear screen', 0x0a,
+          db 'Press "q" to quit program', 0
+
+window_id: dw 0

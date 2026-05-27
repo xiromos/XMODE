@@ -59,7 +59,9 @@ start:
 
     mov ah, 0x03
     int 0x30
-    retf
+
+    mov ah, 0x05
+    int 0x35
 
 header: db '----Standard Commands----', 0x0a, 0
 help: db 'HELP: shows this help message', 0x0a, 0
