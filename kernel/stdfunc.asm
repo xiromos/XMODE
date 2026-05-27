@@ -60,7 +60,8 @@ draw_char:
     imul eax, [pitch]        ; y * pitch
 
     mov ebx, [cur_x]
-    imul ebx, 3              ; x * 3
+    movzx ecx, byte [bpp]
+    imul ebx, ecx              ; x * 3
 
     add eax, ebx
     add eax, [frame_buffer]
@@ -84,8 +85,11 @@ draw_char:
 
 .skip:
     shl dl, 1
-    add edi, 3               ;next pixel
-
+    push ecx
+    movzx ecx, byte [bpp]
+    add edi, ecx               ;next pixel
+    pop ecx
+    
     dec ebp
     jnz .col
 
@@ -100,7 +104,8 @@ draw_char:
     imul eax, [pitch]        ; y * pitch
 
     mov ebx, [cur_x]
-    imul ebx, 3              ; x * 3
+    movzx ecx, byte [bpp]
+    imul ebx, ecx              ; x * 3
 
     add eax, ebx
     add eax, [frame_buffer]
@@ -115,7 +120,10 @@ draw_char:
     mov eax, [bgcolor]
     mov [edi], eax
 
-    add edi, 3               ;next pixel
+    push ecx
+    movzx ecx, byte [bpp]
+    add edi, ecx               ;next pixel
+    pop ecx
 
     dec ebp
     jnz .clear_col

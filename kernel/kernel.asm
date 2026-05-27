@@ -7,6 +7,7 @@ start:
     mov es, ax
     mov ds, ax
 
+
     mov eax, [0x7c00+28]
     mov [hidden_sectors], eax
 
@@ -31,6 +32,25 @@ start:
     shr eax, 3
     mov [bpp], al               ;should be 3
 
+    ;get memory map
+    xor eax, eax
+    xor ebx, ebx
+    mov di, mmap_buffer
+.next:
+    mov eax, 0xe820
+    mov edx, 0x534D4150
+    mov ecx, 24
+    int 0x15
+    jc .done
+
+    cmp eax, 0x534D4150
+    jne .done
+    mov [mmap_entries], ecx
+    add di, cx
+    cmp ebx, 0
+    jne .next
+.done:
+    
     mov ax, tss
     shr ax, 16
     mov byte [gdt_start.descriptor+4], al
@@ -87,7 +107,49 @@ gdt_descriptor: dw gdt_start.end - gdt_start - 1
 
 ; extern kmain
 ; global main
+times 250 -($ - start) db 0
+bits 64
+uefi:
+    cli
+    mov [rel frame_buffer], edx
+    mov [rel bpp], cl
+    mov [rel real_width], ebx
+
+    lea eax, [rel tss]
+    shr eax, 16
+    mov byte [rel gdt_start.descriptor+4], al
+    mov byte [rel gdt_start.descriptor+7], ah
+    lgdt [rel gdt_descriptor]
+
+    mov rax, cr0
+    btr rax, 31
+    mov cr0, rax
+
+    mov ecx, 0xC0000080
+    rdmsr
+    btr eax, 8
+    wrmsr
+
+    mov rax, cr0
+    or rax, 1
+    mov cr0, rax
 bits 32
+    jmp far code_off:uefi2
+uefi2:
+    mov eax, [real_width]
+    movzx ebx, byte [bpp]
+    mul ebx
+    mov [pitch], eax
+;     mov ecx, 10000
+;     mov eax, 0x00ffffff
+;     mov edi, [frame_buffer]
+;     movzx ebx, byte [bpp]
+; .loop:
+;     mov [edi], eax
+;     add edi, ebx
+;     dec ecx
+;     jnz .loop
+    ;hlt
 main:
     mov ax, data_off
     mov es, ax
@@ -100,16 +162,19 @@ main:
     call set_idt
     lidt [idt_descriptor]
     call remap_pic
-    mov al, 0xfc
-    out 0x21, al
+    ; mov al, 0xfc
+    ; out 0x21, al
+    xor al, al
+    out 0xa1, al
     sti
     mov eax, [frame_buffer]
     mov [cur], eax
     mov dword [bgcolor], 0x0014c4be
     mov edi, [frame_buffer]
     mov ecx, width*height
+    movzx eax, byte [bpp]
 .loop:
-    add edi, 3
+    add edi, eax
     mov dword [edi], 0x0014c4be
     loop .loop
     ;0xFFFFFFFF = white
@@ -141,7 +206,7 @@ main:
     call ata_identify
 
     mov ah, 0x12
-    ;int 0x32
+    int 0x32
     call get_bpb_data
 
     mov ax, [root_entries]
@@ -164,6 +229,7 @@ main:
     mov bx, [fat_size]
     mul bx
     add ax, [reserved_sectors]
+    add ax, [hidden_sectors]
     mov [root_start], ax
 
     ;calculate data start sector
@@ -192,6 +258,13 @@ main:
     mov ah, 0x01
     int 0x30
     call print_newline
+    inc word [task_count]
+
+    mov edi, tasks_esp
+    add edi, TASK_SIZE      ;task 1 - shell
+    mov esi, shell_task_str
+    mov ecx, 11
+    rep movsb
     ; write to disk
     ; mov ah, 0x03
     ; mov edi, 0x15000
@@ -316,6 +389,7 @@ load_fat:
     mov edi, 0x4000
     xor ecx, ecx
     mov cx, [reserved_sectors]
+    add ecx, [hidden_sectors]
     xor ebx, ebx
     cmp word [fat_size], 32
     jb .continue
