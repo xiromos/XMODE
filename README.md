@@ -10,6 +10,7 @@ Here you can read how to install XMODE in Xiromos: https://github.com/xiromos/Xi
 ### Standard
 **help**: show available commands<br>
 **clear**: clear screen<br>
+**mmap**: shows memory map
 
 ### Filesystem
 **ls**: list content of current directory<br>
@@ -24,3 +25,20 @@ Here you can read how to install XMODE in Xiromos: https://github.com/xiromos/Xi
 - VESA Video Mode: 1024x768px
 - Window managment
 - own assembler
+- preemptive multitasking
+
+## How to use
+
+To execute a program write it name in capital letters into the terminal. If you want to do a file operation (e.g. read FILE.TXT)<br>
+the filename has to be capital. Because there is no mouse support you can switch between programs via the F1 key. It then opens a <br>
+window in which you can chose a current active task. To do that just type the number of the task or press ESC. To get a list of <br>
+available commands type "help". Also, if you dont boot with UEFI you will probably use Xiromos. To use XMODE just type "XMODE".
+
+## TODO
+
+- Window Manager
+- Multi-Core support
+- IDE DMA disk driver and then AHCI
+- Internet
+- improve assembler
+- support of higher resolutions (1080p)
