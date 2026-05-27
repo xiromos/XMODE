@@ -596,6 +596,17 @@ read_dma:
     mov dx, [bm_base4]
     xor al, al
     out dx, al
+    
+    ;set PRDT
+    mov dx, [bm_base4]
+    add dx, 4
+    mov eax, prdt
+    out dx, eax
+
+    ;set READ bit
+    mov dx, [bm_base4]
+    mov al, 0x08        ;READ
+    out dx, al
 
     ;clear status
     mov dx, [bm_base4]
@@ -603,17 +614,6 @@ read_dma:
     in al, dx
     or al, 0x06
     out dx, al
-
-    ;set PRDT
-    mov dx, [bm_base4]
-    add dx, 4
-    mov eax, prdt
-    out dx, eax
-.wait:
-    mov dx, 0x1f7
-    in al, dx
-    test al, 0x80
-    jnz .wait
 
     mov dx, 0x1f6
     mov al, 0xe0       ;Master + LBA
@@ -624,7 +624,7 @@ read_dma:
     out dx, al
 
     mov dx, 0x1f3
-    mov al, 1
+    mov al, 0
     out dx, al
 
     mov dx, 0x1f4
@@ -637,29 +637,13 @@ read_dma:
     mov dx, 0x1f7   ;set command
     mov al, 0xc8    ;read DMA 28bit LBA
     out dx, al
-.wait_rdy:
-    in al, dx
-    test al, 0x80
-    jnz .wait_rdy
 
-    test al, 0x08
-    jnz .continue
-
-    test al, 0x01
-    jnz .error
-
-    jmp .wait_rdy
-.continue:
+    mov byte [dma_done], 0
     mov dx, [bm_base4]
     mov al, 0x09
     out dx, al
     
-    mov dx, [bm_base4]
-    add dx, 2
-    mov byte [dma_done], 0
 .wait_dma:
-    ; in al, dx
-    ; test al, 0x01
     cmp byte [dma_done], 1
     jne .wait_dma
 
@@ -681,7 +665,7 @@ read_dma:
     popa
     iret
 .error:
-    mov al, '!'
+    mov al, '-'
     call print_char
     popa
     iret
