@@ -206,7 +206,7 @@ main:
     call ata_identify
 
     mov ah, 0x12
-    int 0x32
+    ;int 0x32
     call get_bpb_data
 
     mov ax, [root_entries]
