@@ -41,7 +41,7 @@ scan_codes:
     db 0                ; Caps Lock
 
     ; F1–F10
-    db 0,0,0,0,0,0,0,0,0,0
+    db 0x3b,0x3c,0x3d,0x3e,0x3f,0x40,0x41,0x42,0x43,0x44
 
     ; More control keys
     db 0                ; Num Lock
@@ -67,7 +67,7 @@ keymap_shift:
     db 0                ; Caps Lock
 
     ; F1–F10
-    db 0,0,0,0,0,0,0,0,0,0
+    db 0x3b,0x3c,0x3d,0x3e,0x3f,0x40,0x41,0x42,0x43,0x44
 
     ; More control keys
     db 0                ; Num Lock
@@ -82,20 +82,29 @@ keymap_shift:
 key_buffer: times 256 db 0
 buf_head:   dd 0
 buf_tail:   dd 0
+KEY_BUFFER      equ 0x50000
+KEY_BUFFER_SIZE equ 256
+BUFFER_HEAD     equ 0x57000
+BUFFER_TAIL    equ 0x57100
 shift: db 0
 vbe_info: times 256 db 0
 rows: dd 16
 width       equ 1024
 height      equ 768
 max_rows    equ 48      ;768 / 16
+
+real_width: dd 0
+real_height: dd 0
+
 bpp: db 0
 pitch: dd 0
 cur_x: dd 0
 cur_y: dd 0
 color: dd 0
 bgcolor: dd 0
-user_stack  equ 0x95000
-program_stack   equ 0xa0000
+user_stack  equ 0x9fb00     ;0x91000
+program_stack   equ 0x1a0000
+program_stack_off   equ 0x1000      ; ~4KB
 kernel_stack dd 0
 tss:
     dd 0    ; dd prev_tss
@@ -128,6 +137,11 @@ tss:
 .end:
 hex4_out: db '0x0000', 0
 hex8_out: db '0x00000000', 0
+mmap_buffer     equ 0x7e00  ;512 bytes after bootloader
+mmap_entries: dd 0
+mmap_str: db 'Memory Map:           1 - Usable / 2 - Reserved', 0
+memmap_str: db 'mmap', 0
+mmap_bytes_per_entry: db 'Bytes per Entry: ', 0
 ;commands
 help_msg: db 'In progress...', 0
 help_str: db 'help', 0
@@ -137,6 +151,7 @@ read_str: db 'read', 0
 del_str: db 'del', 0
 rename_str: db 'rename', 0
 write_str: db 'write', 0
+tasklist_str: db 'tasklist', 0
 command_buffer: db 0 dup(50)
 ;disk
 fs_loading_str: db '> Loading FAT16...', 0
@@ -177,7 +192,7 @@ subdir_entries: dw 0
 root_addr       equ 0
 fat_addr        equ 0x4000
 program_addr    equ 0x100000
-
+program_addr_off equ 0x20000
 dir_str: db '<DIR>', 0
 sys_str: db '<SYS>', 0
 read_buffer: times 13 db 0
@@ -203,12 +218,12 @@ write_prompt: db 'Enter file content (ESC = save):', 0
 
 file_test_txt db        "TEST    TXT"
 program_help_bin db     "HELP    BIN"
-
+shell_task_str db       "SHELL   SYS"
 
 ;windows and multitasking
 windows_list:
     times 10 db 0
-num_windows: dw 0
+num_windows: dw 10
 window_id: dw 0
 win_x: dd 0
 win_y: dd 0
@@ -222,3 +237,50 @@ char_bgcolor: dd 0
 win_pitch: dd 0
 win_rows: dd 0
 cust_height: dd 0
+win_buffer_addr: dd 0
+
+task_count: dw 0
+max_tasks: dw 4
+current_task: dw 1
+task_slots: dw 4
+
+main_task: dw 1
+
+tasks_esp:
+    times 11 db 0
+    dd 0        ;task 0 (reserved)
+    dd 0
+    times 11 db 0
+    dd 0        ;task 1 (shell)
+    dd 0
+    times 11 db 0
+    dd 0        ;task 2
+    dd 0
+    times 11 db 0
+    dd 0        ;task 3
+    dd 0
+    times 11 db 0
+    dd 0        ;task 4
+    dd 0
+    times 11 db 0
+    dd 0
+    dd 0
+
+tasks_kernel_stack      equ 0x90000
+tasks_kernel_stack_off  equ 0x1000      ;every task has ~4KB stack
+TASK_SIZE               equ 19
+task_limit: db 'Maximum amount of tasks achieved!', 0
+create_task_err: db 'Error while creating task', 0
+
+switch_tasks_window:
+    dd 0            ;foreground color
+    dd 0x00ffffff   ;background color
+    dd 500          ;width
+    dd 200          ;height
+    dd width /2-250          ;CurX
+    dd height /2-150          ;CurY
+    dd width /2-250          ;original CurX
+    dd height /2-150          ;original CurY
+switch_tasks_str: db 'Switch Tasks - ESC to quit', 0
+switch_tasks_win_id: dw 0
+switch_tasks_msg: db 'Available Tasks: ', 0
