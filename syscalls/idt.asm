@@ -198,6 +198,10 @@ set_idt:
     mov eax, window_functions
     mov ebx, 0x34
     call set_idt_entry
+
+    mov eax, program_sys_handler
+    mov ebx, 0x35
+    call set_idt_entry
     ret
 
 isr_default:
