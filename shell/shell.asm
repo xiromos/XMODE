@@ -102,6 +102,16 @@ exec_cmd:
     call cmp_str
     jc .write_file
 
+    mov edi, command_buffer
+    mov esi, memmap_str
+    call cmp_str
+    jc show_mmap
+
+    mov edi, command_buffer
+    mov esi, tasklist_str
+    call cmp_str
+    jc show_tasks
+
     jmp .exec_program
     ret
 .exec_program:
@@ -136,16 +146,126 @@ exec_cmd:
     repe movsb
 
     mov ah, 0x08
+    mov esi, read_buffer
     mov edi, program_addr
+    int 0x33
+    jnc .found_prog
+
+    mov esi, read_buffer
+    mov byte [esi+8], 'X'
+    mov byte [esi+9], 'M'
+    mov byte [esi+10], 'E'
+    mov edi, program_addr_off
+    imul edi, ecx
+    add edi, program_addr
+    int 0x33
+    jc .exec_prog_err
+
+.found_prog:
+    mov ax, [max_tasks]
+    cmp word [task_count], ax
+    jae .too_much_tasks
+
+    ;save shell context
+    mov eax, 1
+    imul eax, TASK_SIZE
+    mov edi, tasks_esp
+    add edi, eax
+    mov [edi+15], esp
+    
+    mov esi, read_buffer
+    mov dx, [task_slots]
+    mov ecx, 2
+
+    mov edi, tasks_esp
+    add edi, TASK_SIZE*2     ;skip task 0 + shell
+.find_loop:
+    cmp byte [edi], 0xe5
+    je .found_slot
+    cmp byte [edi], 0
+    je .found_slot
+
+    add edi, TASK_SIZE
+
+    inc ecx
+    dec dx
+    jnz .find_loop
+
+    mov esi, create_task_err
+    mov ebx, COLOR_RED
+    call print_string
+    ret
+.found_slot:
+    push esi
+    push ecx
+    mov ecx, 11
+    rep movsb
+    pop ecx
+    pop esi
+
+    mov edi, program_addr_off
+    imul edi, ecx
+    add edi, program_addr
+
+    mov ah, 0x08
     mov esi, read_buffer
     int 0x33
     jc .exec_prog_err
-    
+
     mov esi, read_buffer2
     mov [kernel_stack], esp
-    mov esp, program_stack
-    call far code_off_user:program_addr
+
+    mov eax, program_stack_off
+    imul eax, ecx
+    add eax, program_stack
+    mov esp, eax
+
+    mov eax, program_addr_off
+    imul eax, ecx
+    add eax, program_addr
+
+    push ss
+    push esp
+    ;pushfd                 ;bug - if program does infinite loop -> freeze
+    push dword 0x202        ;enable interrupt flag
+    push cs
+    push eax
+
+    pushad
+    push ds
+    push es
+    push fs
+    push gs
+
+    movzx eax, cx
+    imul eax, TASK_SIZE
+    mov edi, tasks_esp
+    add edi, eax
+    mov [edi+15], esp
+
+    mov [main_task], cx
+    inc word [task_count]
+
+    int 0x20
+    ;jmp program_addr
+
+    ;call far code_off_user:program_addr
     mov esp, [kernel_stack]
+.leap:
+    mov ecx, 25
+.loop:
+    mov ebx, COLOR_RED
+    mov al, '#'
+    call print_char
+    nop
+    dec ecx
+    jnz .loop
+    ret
+.too_much_tasks:
+    mov esi, task_limit
+    mov ebx, COLOR_RED
+    call print_string
+    call print_newline
     ret
 .exec_prog_err:
     ret
@@ -156,7 +276,13 @@ exec_cmd:
     int 0x33
     jc .exec_prog_err
 
-    call far code_off_user:program_addr
+    mov esi, program_help_bin
+    mov edi, read_buffer
+    mov ecx, 11
+    rep movsb
+
+    jmp .found_prog
+    ;call far code_off_user:program_addr
     ret
 
 .clear_screen:
@@ -195,6 +321,7 @@ exec_cmd:
     lodsb
     cmp al, 0x0a
     je .handle_newline
+    mov ebx, 0x00ffffff
     call print_char
     loop .read_file_loop
 
@@ -663,3 +790,95 @@ get_text:
     stosb
     inc ecx
     jmp .loop
+
+show_mmap:
+    call print_newline
+    mov esi, mmap_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+
+    mov esi, mmap_bytes_per_entry
+    call print_string
+    mov eax, [mmap_entries]
+    call print_dec
+    call print_newline
+    call print_newline
+
+    mov ecx, 10
+    mov esi, mmap_buffer
+.loop2:
+    mov eax, [esi+4]
+    mov edx, eax
+    call print_hex8
+
+    mov eax, [esi]
+    mov edx, eax
+    call print_hex8
+
+    mov al, 0x20
+    call print_char
+
+    mov eax, [esi+12]
+    mov edx, eax
+    call print_hex8
+
+    mov eax, [esi+8]
+    mov edx, eax
+    call print_hex8
+
+    mov al, 0x20
+    call print_char
+
+    mov eax, [esi+16]
+    call print_dec
+
+    call print_newline
+    add esi, [mmap_entries]
+    dec ecx
+    jnz .loop2
+    call print_newline
+    ret
+
+
+show_tasks:
+    call print_newline
+    mov esi, tasks_esp
+    add esi, TASK_SIZE     ;skip task 0
+    mov dx, [max_tasks]
+    xor eax, eax
+.loop:
+    cmp byte [esi], 0xe5
+    je .skip
+    cmp byte [esi], 0
+    je .skip
+
+    inc eax
+    call print_dec
+    push eax
+    mov ebx, 0x00ffffff
+    mov al, ':'
+    call print_char
+    mov al, 0x20
+    call print_char
+    pop eax
+    
+    mov cx, 11
+    push esi
+    push eax
+.print_loop:
+    lodsb
+    mov ebx, 0x00ffffff
+    call print_char
+    dec cx
+    jnz .print_loop
+    pop eax
+    pop esi
+    call print_newline
+.skip:
+    add esi, TASK_SIZE
+    dec dx
+    jnz .loop
+
+    call print_newline
+    ret
