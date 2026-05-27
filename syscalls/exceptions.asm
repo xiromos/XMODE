@@ -591,12 +591,8 @@ irq14_handler:
     mov al, 0x04
     out dx, al
 
-    mov al, '1'
-    call print_char
     mov al, 0x20
     out 0xa0, al
     out 0x20, al
-    mov al, '2'
-    call print_char
     popa
     iret
