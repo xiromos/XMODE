@@ -49,6 +49,12 @@ output_handler:
     popa
     iret
 .print_string:
+    push bx
+    mov bx, [current_task]
+    cmp bx, [main_task]
+    pop bx
+    ;jne .print_string_sleep
+
     mov [color], ebx
     lodsb
     cmp al, 0
@@ -58,8 +64,18 @@ output_handler:
 .done_print:
     popa
     iret
+.print_string_sleep:
+    hlt
+    jmp .print_string
+
 
 .print_char:
+    push bx
+    mov bx, [current_task]
+    cmp bx, [main_task]
+    pop bx
+    jne .print_char_sleep
+
     mov [color], ebx
     cmp al, 0x0a
     je .newline
@@ -81,6 +97,9 @@ output_handler:
     call scroll
     mov dword [cur_y], height - 16
     jmp .done
+.print_char_sleep:
+    hlt
+    jmp .print_char
 
 .print_newline:
     mov dword [cur_x], 0
@@ -330,7 +349,8 @@ draw_char_custom:
     imul eax, [pitch]        ; y * pitch
 
     mov ebx, [edi+16]
-    imul ebx, 3              ; x * 3
+    movzx ecx, byte [bpp]
+    imul ebx, ecx              ; x * 3
 
     add eax, ebx
     add eax, [frame_buffer]
@@ -357,7 +377,10 @@ draw_char_custom:
     mov [edi], eax
 .continue:
     shl dl, 1
-    add edi, 3               ;next pixel
+    push eax
+    movzx eax, byte [bpp]
+    add edi, eax               ;next pixel
+    pop eax
 
     dec ebp
     jnz .col
@@ -377,8 +400,9 @@ draw_char_custom:
     mov eax, [edi+20]
     imul eax, [pitch]        ; y * pitch
 
+    movzx ecx, byte [bpp]
     mov ebx, [edi+16]
-    imul ebx, 3              ; x * 3
+    imul ebx, ecx              ; x * 3
 
     add eax, ebx
     add eax, [frame_buffer]
@@ -393,7 +417,10 @@ draw_char_custom:
     mov eax, [edi+4]
     mov [esi], eax
 
-    add esi, 3               ;next pixel
+    push eax
+    movzx eax, byte [bpp]
+    add esi, eax               ;next pixel
+    pop eax
 
     dec ebp
     jnz .clear_col
