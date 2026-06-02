@@ -200,13 +200,35 @@ main:
     call print_string
 
     call scan_disk_pci
-    movzx edx, word [bm_base4]
+    mov edx, [bm_base]
+    call print_hex8
+
+    mov al, 0x20
+    call print_char
+
+    mov edx, [abar]
     call print_hex8
     call print_newline
-    call ata_identify
 
-    mov ah, 0x12
+    ;call ahci_init
+    mov esi, ahci_initialized
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+
+    call search_boot_device
+
+    ;test write with DMA
+    mov edi, 0x8000
+    mov ebx, 4
+    mov ecx, 100
+    mov ah, 0x13
     ;int 0x32
+
+    xor al, al
+    call read_ahci
+    ;cli
+    ;hlt
     call get_bpb_data
 
     mov ax, [root_entries]
@@ -353,7 +375,7 @@ get_bpb_data:
     mov ecx, disk_lba
     mov ebx, 1        ;sector count
     int 0x32
-    
+
     mov ax, [0x7c00+11]
     mov [bytes_per_sec], ax
     mov al, [0x7c00+13]
@@ -404,7 +426,9 @@ load_fat:
 
 
 scan_disk_pci:
+    mov byte [avail_disks], 2
     xor ebx, ebx
+    mov edi, 0x8a000
 .bus_loop:
     cmp byte [pci_bus], 255
     jae .done
@@ -429,17 +453,37 @@ scan_disk_pci:
     movzx ebx, byte [pci_function]
     shl ebx, 8
     or eax, ebx
-
-    push eax
+    
+    mov ebx, eax
+    ;push eax
     call pci_read
-    pop eax
+    ;pop eax
 
     cmp ax, 0xffff
     je .skip
 
-    mov ecx, eax
+    push ax
+    mov al, [pci_bus]
+    stosb
+    mov al, [pci_device]
+    stosb
+    mov al, [pci_function]
+    stosb
+    xor al, al
+    stosb       ;padding
+    pop ax
+
+    stosd
+
+    mov ecx, ebx
+    mov eax, ebx
     or eax, 0x08
     call pci_read
+    
+    stosd
+    mov byte [edi], 0x0a
+    inc edi
+
     mov ebx, eax
     mov eax, ecx
 
@@ -451,7 +495,7 @@ scan_disk_pci:
     mov edx, ebx
     shr edx, 16
     cmp dl, 0x6     ;AHCI
-    je .found
+    je .found_ahci
     cmp dl, 0x01
     je .found       ;IDE
     jmp .skip
@@ -472,14 +516,60 @@ scan_disk_pci:
     mov ecx, eax
     or eax, 0x04
     call pci_read
-    or eax, 0x0005  ;IO + bus master
+    or eax, 0x0006
     mov ebx, eax
     mov eax, ecx
     or eax, 0x04
     call pci_write
 
     call read_bar4
-    jmp .done
+
+    call ide_init
+    jmp .skip
+.found_ahci:
+    mov edx, ebx
+    shr edx, 8
+    cmp dl, 0x01        ;Programming Interface
+    jne .skip
+
+    mov eax, 0x80000000
+    movzx ebx, byte [pci_bus]
+    shl ebx, 16
+    or eax, ebx
+
+    movzx ebx, byte [pci_device]
+    shl ebx, 11
+    or eax, ebx
+
+    movzx ebx, byte [pci_function]
+    shl ebx, 8
+    or eax, ebx
+
+    mov ecx, eax
+    or eax, 0x04
+    call pci_read
+    or eax, 0x0006  ;IO + bus master
+    and eax, ~(1 << 10)
+    mov ebx, eax
+    mov eax, ecx
+    or eax, 0x04
+    call pci_write
+
+    call read_bar5
+
+    mov eax, ecx
+    or eax, 0x3c
+    call pci_read
+
+    and eax, 0xff
+    add al, 32
+    mov [ahci_irq], al
+
+    movzx ebx, al
+    mov eax, ahci_interrupt_handler
+    call set_idt_entry
+
+    call ahci_init
 .next_device:
     inc byte [pci_device]
     jmp .device_loop
@@ -490,6 +580,7 @@ scan_disk_pci:
     inc byte [pci_bus]
     jmp .bus_loop
 .done:
+    mov byte [edi], '$'
     ret
 pci_read:
     ;EAX = PCI adress
@@ -540,28 +631,34 @@ read_bar4:
     mov [bm_base4], ax
     ret
 
-ata_identify:
-    mov dx, 0x1f6
-    mov al, 0xe0
-    out dx, al
+read_bar5:
+    mov eax, 0x80000000
+    movzx ebx, byte [pci_bus]
+    shl ebx, 16
+    or eax, ebx
 
-    mov dx, 0x1f7
-    mov al, 0xec
-    out dx, al
-.wait:
-    in al, dx
-    test al, 0x80
-    jnz .wait
+    movzx ebx, byte [pci_device]
+    shl ebx, 11
+    or eax, ebx
 
-    test al, 0x08
-    jz .wait
+    movzx ebx, byte [pci_function]
+    shl ebx, 8
+    or eax, ebx
 
-    mov ecx, 256
-    mov dx, 0x1f0
-.read:
-    in ax, dx
-    dec ecx
-    jnz .read
+    or eax, 0x24
+    call pci_read
+
+    and eax, 0xfffffff0     ;remove flags
+    mov [abar], eax         ;AHCI Base Address Register
+
+    ;activate global AHCI interrupts
+    mov eax, [abar]
+    mov ebx, [eax+4]
+    or ebx, (1 << 1)
+    mov [eax+4], ebx
+
+    ret
+search_boot_device:
     ret
 %include "/home/technodon/Downloads/xmode/data/data.asm"
 %include "/home/technodon/Downloads/xmode/data/font.asm"
@@ -571,6 +668,7 @@ ata_identify:
 %include "/home/technodon/Downloads/xmode/syscalls/idt.asm"
 %include "/home/technodon/Downloads/xmode/shell/shell.asm"
 %include "/home/technodon/Downloads/xmode/drivers/fs16.asm"
+%include "/home/technodon/Downloads/xmode/drivers/pci.asm"
 font8x16:
     incbin "/home/technodon/Downloads/xmode/data/DEFAULT.FNT"
 disk_error_msg: db 'Disk Read Error', 0
