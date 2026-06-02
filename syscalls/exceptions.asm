@@ -453,7 +453,6 @@ program_sys_handler:
     pop es
     pop ds
     popad
-
     iret
     cli
     hlt
@@ -576,11 +575,8 @@ switch_tasks:
 irq14_handler:
     pusha
 
-    mov byte [dma_done], 1
-
-    ;read IDE status
-    ; mov dx, 0x1f7
-    ; in al, dx
+    mov dx, 0x1f7
+    in al, dx
 
     mov dx, [bm_base4]
     add dx, 2
@@ -591,8 +587,58 @@ irq14_handler:
     mov al, 0x04
     out dx, al
 
+    ;stop DMA
+    mov dx, [bm_base4]
+    xor al, al
+    out dx, al
+    
+    ;test if error
+    mov dx, [bm_base4]
+    add dx, 2
+    in al, dx
+    test al, 0x02
+    jnz .error
+
     mov al, 0x20
     out 0xa0, al
     out 0x20, al
+    mov byte [ide_running], 0
+    popa
+    iret
+
+.error:
+    mov al, '%'
+    call print_char
+    mov al, 0x20
+    out 0xa0, al
+    out 0x20, al
+    mov byte [ide_running], 0
+    popa
+    iret
+
+
+ahci_interrupt_handler:
+    pusha
+    mov al, '!'
+    call print_char
+    mov eax, [abar]       ;IS
+    mov ebx, [eax+8]
+    mov [eax+8], ebx
+
+    mov esi, ahci_device_list_addr
+    mov dx, [ahci_devices]
+.loop:
+    mov eax, [esi+4]        ;port address
+    mov ebx, [eax+0x10]     ;IS
+    mov [eax+0x10], ebx
+
+    add esi, AHCI_PORT_ENTRY_SIZE
+    dec dx
+    jnz .loop
+
+    mov al, 0x20
+    out 0xa0, al
+    out 0x20, al
+
     popa
     iret
