@@ -23,9 +23,11 @@ Here you can read how to install XMODE in Xiromos: https://github.com/xiromos/Xi
 
 - FAT16
 - VESA Video Mode: 1024x768px
-- Window managment
+- windows
 - own assembler
 - preemptive multitasking
+- DMA driver for hard disks
+- multi-disk support
 
 ## How to use
 
@@ -38,7 +40,7 @@ available commands type "help". Also, if you dont boot with UEFI you will probab
 
 - Window Manager
 - Multi-Core support
-- IDE DMA disk driver and then AHCI
+- make AHCI driver
 - Internet
 - improve assembler
 - support of higher resolutions (1080p)
