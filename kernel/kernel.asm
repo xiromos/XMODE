@@ -660,15 +660,15 @@ read_bar5:
     ret
 search_boot_device:
     ret
-%include "/home/technodon/Downloads/xmode/data/data.asm"
-%include "/home/technodon/Downloads/xmode/data/font.asm"
-%include "/home/technodon/Downloads/xmode/kernel/stdfunc.asm"
-%include "/home/technodon/Downloads/xmode/syscalls/output.asm"
-%include "/home/technodon/Downloads/xmode/syscalls/exceptions.asm"
-%include "/home/technodon/Downloads/xmode/syscalls/idt.asm"
-%include "/home/technodon/Downloads/xmode/shell/shell.asm"
-%include "/home/technodon/Downloads/xmode/drivers/fs16.asm"
-%include "/home/technodon/Downloads/xmode/drivers/pci.asm"
+%include "data/data.asm"
+%include "data/font.asm"
+%include "kernel/stdfunc.asm"
+%include "syscalls/output.asm"
+%include "syscalls/exceptions.asm"
+%include "syscalls/idt.asm"
+%include "shell/shell.asm"
+%include "drivers/fs16.asm"
+%include "drivers/pci.asm"
 font8x16:
     incbin "/home/technodon/Downloads/xmode/data/DEFAULT.FNT"
 disk_error_msg: db 'Disk Read Error', 0
