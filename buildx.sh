@@ -20,18 +20,28 @@ nasm -f bin xasm/xasm.asm -o  xasm/xasm.bin
 nasm -f win64 boot.asm -o boot.obj
 x86_64-w64-mingw32-ld -dll -shared --subsystem 10 -e _efi_main -o bootx64.efi boot.obj
 
-mmd -i ~/Downloads/OS/disk.img ::/EFI
-mmd -i  ~/Downloads/OS/disk.img ::/EFI/BOOT
-mcopy -i  ~/Downloads/OS/disk.img bootx64.efi ::/EFI/BOOT
-mcopy -i  ~/Downloads/OS/disk.img kernel/kernel.bin ::XMODE.BIN
-mcopy -i  ~/Downloads/OS/disk.img programs/help.bin ::HELP.BIN
-mcopy -i  ~/Downloads/OS/disk.img programs/window.bin ::WINDOW.BIN
-mcopy -i  ~/Downloads/OS/disk.img xasm/xasm.bin ::XASM.BIN
-mcopy -i  ~/Downloads/OS/disk.img sys/ ::SYS
-mattrib -i  ~/Downloads/OS/disk.img +s ::SYS/AUTOSTRT.SYS
-mattrib -i  ~/Downloads/OS/disk.img +s ::SYS/1BOOT.SYS
-mcopy -i  ~/Downloads/OS/disk.img xasm/test.asm ::TEST.ASM
-
+# mmd -i ~/Downloads/OS/disk.img ::/EFI
+# mmd -i  ~/Downloads/OS/disk.img ::/EFI/BOOT
+# mcopy -i  ~/Downloads/OS/disk.img bootx64.efi ::/EFI/BOOT
+# mcopy -i  ~/Downloads/OS/disk.img kernel/kernel.bin ::XMODE.BIN
+# mcopy -i  ~/Downloads/OS/disk.img programs/help.bin ::HELP.BIN
+# mcopy -i  ~/Downloads/OS/disk.img programs/window.bin ::WINDOW.BIN
+# mcopy -i  ~/Downloads/OS/disk.img xasm/xasm.bin ::XASM.BIN
+# mcopy -i  ~/Downloads/OS/disk.img sys/ ::SYS
+# mattrib -i  ~/Downloads/OS/disk.img +s ::SYS/AUTOSTRT.SYS
+# mattrib -i  ~/Downloads/OS/disk.img +s ::SYS/1BOOT.SYS
+# mcopy -i  ~/Downloads/OS/disk.img xasm/test.asm ::TEST.ASM
+mmd -i ~/Downloads/Xiromos/disk.img ::/EFI
+mmd -i  ~/Downloads/Xiromos/disk.img ::/EFI/BOOT
+mcopy -i  ~/Downloads/Xiromos/disk.img bootx64.efi ::/EFI/BOOT
+mcopy -i  ~/Downloads/Xiromos/disk.img kernel/kernel.bin ::XMODE.BIN
+mcopy -i  ~/Downloads/Xiromos/disk.img programs/help.bin ::HELP.BIN
+mcopy -i  ~/Downloads/Xiromos/disk.img programs/window.bin ::WINDOW.BIN
+mcopy -i  ~/Downloads/Xiromos/disk.img xasm/xasm.bin ::XASM.BIN
+mcopy -i  ~/Downloads/Xiromos/disk.img sys/ ::SYS
+mattrib -i  ~/Downloads/Xiromos/disk.img +s ::SYS/AUTOSTRT.SYS
+mattrib -i  ~/Downloads/Xiromos/disk.img +s ::SYS/1BOOT.SYS
+mcopy -i  ~/Downloads/Xiromos/disk.img xasm/test.asm ::TEST.ASM
 
 # Memory Map        (OS needs min. 25MB RAM)
 # 0x0000 - 0x3fff: ROOT Directory
