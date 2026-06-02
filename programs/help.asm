@@ -1,4 +1,4 @@
-[org 0x100000]
+[org 0x2000000]
 bits 32
 
 start:
