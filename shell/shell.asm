@@ -112,7 +112,30 @@ exec_cmd:
     call cmp_str
     jc show_tasks
 
+    mov edi, command_buffer
+    mov esi, taskkill_str
+    call cmp_str
+    jc kill_task
+
+    mov edi, command_buffer
+    mov esi, pci_str
+    call cmp_str
+    jc show_pci
+
+    mov edi, command_buffer
+    mov esi, ahci_str
+    call cmp_str
+    jc .ahci
+
+    mov edi, command_buffer
+    mov esi, lsdisk_str
+    call cmp_str
+    jc list_drives
+
     jmp .exec_program
+    ret
+.ahci:
+    call ahci_init
     ret
 .exec_program:
     mov esi, [argument]
@@ -882,3 +905,257 @@ show_tasks:
 
     call print_newline
     ret
+
+
+kill_task:
+    mov esi, [argument]
+    mov edi, read_buffer
+    mov ecx, 11
+    call parse_arg
+
+    movzx edx, word [max_tasks]
+    mov edi, tasks_esp
+    mov esi, read_buffer
+    xor ax, ax
+.loop:
+    mov ecx, 11
+    push esi
+    push edi
+    repe cmpsb
+    pop edi
+    pop esi
+    je .found
+
+    add edi, TASK_SIZE
+    inc ax
+    dec edx
+    jnz .loop
+
+    mov esi, task_not_found
+    mov ebx, COLOR_RED
+    call print_string
+    call print_newline
+    ret
+
+.found:
+    mov bx, ax
+    mov ah, 0x06
+    call terminate_task_extern
+    ret
+
+terminate_task_extern:
+    ret
+show_pci:
+    ;Byte:  BUS
+    ;Byte:  DEVICE
+    ;Byte:  FUNCTION
+    ;Byte:  PADDING
+    ;DWORD: VENDOR ID / DEVICE ID
+    ;DWORD: CLASS / SUBCLASS
+
+    mov esi, 0x8a000
+    mov ebx, 0x00ffffff
+.loop:
+    lodsb
+    
+    push esi
+    push eax
+    mov esi, pci_bus_str
+    call print_string
+    pop eax
+    pop esi
+
+    movzx edx, al
+    call print_hex4
+
+    mov al, 0x20
+    call print_char
+
+    lodsb
+
+    push esi
+    push eax
+    mov esi, pci_device_str
+    call print_string
+    pop eax
+    pop esi
+
+    movzx edx, al
+    call print_hex4
+
+    mov al, 0x20
+    call print_char
+
+    lodsb
+
+    push esi
+    push eax
+    mov esi, pci_function_str
+    call print_string
+    pop eax
+    pop esi
+
+    movzx edx, al
+    call print_hex4
+
+    mov al, 0x20
+    call print_char
+
+    inc esi      ;skip padding
+    lodsw
+
+    push esi
+    push eax
+    mov esi, pci_vendorid_str
+    call print_string
+    pop eax
+    pop esi
+
+    movzx edx, ax
+    call print_hex4
+
+    mov al, 0x20
+    call print_char
+
+    lodsw
+
+    push esi
+    push eax
+    mov esi, pci_deviceid_str
+    call print_string
+    pop eax
+    pop esi
+
+    movzx edx, ax
+    call print_hex4
+
+    mov al, 0x20
+    call print_char
+
+    lodsw
+
+    push esi
+    push eax
+    mov esi, pci_class_str
+    call print_string
+    pop eax
+    pop esi
+
+    movzx edx, ax
+    call print_hex4
+
+    mov al, 0x20
+    call print_char
+
+    lodsw
+
+    push esi
+    push eax
+    mov esi, pci_subclass_str
+    call print_string
+    pop eax
+    pop esi
+
+    movzx edx, ax
+    call print_hex4
+
+    mov al, 0x20
+    call print_char
+
+    call print_newline
+
+    inc esi
+    mov al, [esi]
+    cmp al, '$'
+    jne .loop
+    ret
+
+list_drives:
+    mov esi, DRIVE_LIST_ADDR
+    movzx ecx, byte [avail_disks]
+
+    xor eax, eax
+.loop1:
+    cmp byte [esi+9], 0
+    je .no_drive
+    inc eax
+.no_drive:
+    add esi, DRIVE_LIST_ENTRY
+    dec ecx
+    jnz .loop1
+
+    push eax
+    mov esi, avail_drives_str
+    mov ebx, 0x00ffffff
+    call print_string
+    pop eax
+
+    call print_dec
+    call print_newline
+
+    mov esi, DRIVE_LIST_ADDR
+    movzx ecx, byte [avail_disks]
+    xor al, al
+.loop2:
+    cmp byte [esi+9], 0
+    jne .drive
+.continue:
+    inc al
+    add esi, DRIVE_LIST_ENTRY
+    dec ecx
+    jnz .loop2
+
+    call print_newline
+
+    ret
+
+.drive:
+    push esi
+    push eax
+    add al, 0x41
+    call print_char
+    mov al, ':'
+    call print_char
+    mov al, 0x20
+    call print_char
+
+    cmp byte [esi+9], 0xaa
+    je .ahci
+    cmp byte [esi+9], 0xde
+    je .ide
+    cmp byte [esi+9], 0xeb
+    je .usb
+    
+    mov esi, unknown_drive_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+
+    pop eax
+    pop esi
+    jmp .continue
+
+.ahci:
+    mov esi, sata_device_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    pop eax
+    pop esi
+    jmp .continue
+.ide:
+    mov esi, ide_device_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    pop eax
+    pop esi
+    jmp .continue
+.usb:
+    mov esi, usb_storage_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    pop eax
+    pop esi
+    jmp .continue
