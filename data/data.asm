@@ -152,6 +152,10 @@ del_str: db 'del', 0
 rename_str: db 'rename', 0
 write_str: db 'write', 0
 tasklist_str: db 'tasklist', 0
+pci_str: db 'pci', 0
+taskkill_str: db 'taskkill', 0
+ahci_str: db 'ahci', 0
+lsdisk_str: db 'lsdisk', 0
 command_buffer: db 0 dup(50)
 ;disk
 fs_loading_str: db '> Loading FAT16...', 0
@@ -172,6 +176,54 @@ pci_device: db 0
 pci_function: db 0
 bm_base: dd 0
 bm_base4: dw 0
+
+pci_addr     equ 0x8a200
+pci_bus_str: db 'BUS ', 0
+pci_device_str: db 'DEVICE ', 0
+pci_function_str: db 'FUNCTION ', 0
+pci_vendorid_str: db 'VENDOR ', 0
+pci_deviceid_str: db 'DEVICE ID ', 0
+pci_class_str: db 'CLASS ', 0
+pci_subclass_str: db 'SUBCLASS ', 0
+abar: dd 0
+ahci_device_list_addr       equ 0x8a500     ;32 * 16 = max 512 (0x200)
+ahci_devices: dw 0
+ahci_initialized: db '> AHCI devices initialized', 0
+ahci_active: db 0
+AHCI_PORT_ENTRY_SIZE            equ 12
+ahci_prdt:
+    dd 0        ;address low
+    dd 0        ;address high
+    dw 0        ;byte cound
+    dw 0        ;flags
+
+;1 Port (9422B in Memory):
+; - 1024B Command list
+; - 256B Received FIS
+; - 32*256B Command Tables
+; - Alignment (can be used for other information)
+AHCI_MEM_BASE           equ 0x100000
+AHCI_PORT_MEM_OFF       equ 12288        ;1 Command list (1024B), Received FIS (256B), 32 Command Tables (8192B) = 9472 +  ~2.8KB Alignment
+CMD_LIST_SIZE            equ 1024
+RECEIVED_FIS_SIZE        equ 256
+CMD_TABLES_SIZE          equ 256
+
+CMD_TABLES              equ 0x108000
+CMD_TABLES_OFFSET       equ 256
+CMD_LISTS               equ 0x100000
+CMD_LIST_OFFSET         equ 1024
+ahci_irq: db 0
+
+DRIVE_LIST_ADDR        equ 0x8a700     ; ~0x300 (768) bytes
+DRIVE_LIST_ENTRY       equ 32
+avail_disks: db 0
+avail_drives_str: db 'Available Drives: ', 0
+unknown_drive_str: db 'Unknown Drive Type', 0
+sata_device_str: db 'SATA Device', 0
+ide_device_str: db 'IDE Hard Disk', 0
+usb_storage_str: db 'USB Mass Storage Device', 0
+
+ide_running: db 0
 dma_done: db 0
 cur_bmbase_str: db '< BM Base: ', 0
 sec_per_cluster: db 0
@@ -191,7 +243,7 @@ subdir_entries: dw 0
 
 root_addr       equ 0
 fat_addr        equ 0x4000
-program_addr    equ 0x100000
+program_addr    equ 0x2000000
 program_addr_off equ 0x20000
 dir_str: db '<DIR>', 0
 sys_str: db '<SYS>', 0
@@ -284,3 +336,4 @@ switch_tasks_window:
 switch_tasks_str: db 'Switch Tasks - ESC to quit', 0
 switch_tasks_win_id: dw 0
 switch_tasks_msg: db 'Available Tasks: ', 0
+task_not_found: db 'Task not found', 0
