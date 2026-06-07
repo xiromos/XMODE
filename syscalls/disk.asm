@@ -340,6 +340,7 @@ diskio_handler:
     push ecx
     mov ecx, 256
 .write_loop:
+    mov dx, 0x1f7
     in al, dx
     test al, 0x08
     jz .write_loop
@@ -909,6 +910,8 @@ read_ahci:
     ; Px + 0x34  SACT
     ; Px + 0x38  CI    (Command Issue)
 
+    ;cmp eax, 1000
+    ;ja .too_much_sectors
     xor ah, ah
     cmp ax, [ahci_devices]      ;check if device is valid
     ;jae .no_device
@@ -976,18 +979,18 @@ read_ahci:
     ;set FIS
     mov byte [esi], 0x27
     mov byte [esi+1], 0x80
-    mov byte [esi+2], 0x25      ;read DMA extended
+    mov byte [esi+2], 0xec      ;read DMA extended
     mov byte [esi+4], 0         ;LBA 0
     mov byte [esi+5], 0         ;LBA 1
     mov byte [esi+6], 0         ;LBA 2
 
-    mov byte [esi+7], 0x40      ;device byte 
+    mov byte [esi+7], 0      ;device byte
 
     mov byte [esi+8], 0         ;LBA 3
     mov byte [esi+9], 0         ;LBA 4
     mov byte [esi+10], 0        ;LBA 5
 
-    mov byte [esi+12], 1        ;sector count 1
+    mov byte [esi+12], 0        ;sector count 1
     mov byte [esi+13], 0        ;sector count 2
 
     mov dword [eax+0x30], 0xffffffff    ;clear errors
@@ -997,25 +1000,7 @@ read_ahci:
     mov edx, [eax+0x38]
     or edx, ebx
     mov [eax+0x38], edx
-    
-    mov edx, [eax+0x10]
-    call print_hex8
-    call print_newline
-
-    mov edx, [eax+0x20]
-    call print_hex8
-    call print_newline
-
-    mov edx, [eax+0x30]
-    call print_hex8
-    call print_newline
-
-    mov edx, [eax+0x38]
-    call print_hex8
-    call print_newline
     popa
-    mov al, '#'
-    call print_char
     ret
 
 
@@ -1034,7 +1019,7 @@ read_ahci:
 ; WORD 1:  Base Channel
 ; Byte 3:  ATA / ATAPI (0x00 = ATA, 0xaf = ATAPI)
 ; BYTE 4:  0xDE (Drive Type)
-
+; BYTE 5:  Busmastering DMA supported (1 = yes, 0 = no)
 
 
 ide_init:
@@ -1062,7 +1047,10 @@ ide_init:
     mov word [edi+6], dx
     cmp cl, 0xaf
     jne .ata1
+
     mov byte [edi+8], 0xaf
+    inc byte [avail_disks]
+    jmp .device2
 .ata1:
     mov byte [edi+9], 0xde
 
@@ -1071,6 +1059,7 @@ ide_init:
     je .device2
     mov eax, [bm_base]
     mov [edi], eax
+    mov [edi+10], bl        ;DMA supported y/n
 
 .device2:
     mov dx, 0x1f0
@@ -1088,7 +1077,10 @@ ide_init:
     mov word [edi+6], dx
     cmp cl, 0xaf
     jne .ata2
+
     mov byte [edi+8], 0xaf
+    inc byte [avail_disks]
+    jmp .device3
 .ata2:
     mov byte [edi+9], 0xde
 
@@ -1097,6 +1089,8 @@ ide_init:
     je .device3
     mov eax, [bm_base]
     mov [edi], eax
+    mov [edi+10], bl
+
 .device3:
     mov dx, 0x170
     mov al, 0xa0
@@ -1113,7 +1107,10 @@ ide_init:
     mov word [edi+6], dx
     cmp cl, 0xaf
     jne .ata3
+
     mov byte [edi+8], 0xaf
+    inc byte [avail_disks]
+    jmp .device4
 .ata3:
     mov byte [edi+9], 0xde
 
@@ -1122,6 +1119,8 @@ ide_init:
     je .device4
     mov eax, [bm_base]
     mov [edi], eax
+    mov [edi+10], bl
+
 .device4:
     mov dx, 0x170
     mov al, 0xb0
@@ -1138,7 +1137,10 @@ ide_init:
     mov word [edi+6], dx
     cmp cl, 0xaf
     jne .ata4
+
     mov byte [edi+8], 0xaf
+    inc byte [avail_disks]
+    jmp .done
 .ata4:
     mov byte [edi+9], 0xde
 
@@ -1147,6 +1149,7 @@ ide_init:
     je .done
     mov eax, [bm_base]
     mov [edi], eax
+    mov [edi+10], bl
 .done:
     popa
     ret
@@ -1194,12 +1197,24 @@ identify_ata:
     test al, 0x08
     jz .wait
 
+    mov edi, 0x200000
     mov ecx, 256
     sub dx, 7
 .loop2:
     in ax, dx
+    stosw
     loop .loop2
 
+    ;check if busmastering DMA is supported
+    mov ax, [0x200000+98]
+    test ax, 0x0100
+    jz .no_dma
+
+    mov bl, 1       ;DMA supported
+    jmp .end
+.no_dma:
+    xor bl, bl      ;DMA not supported
+.end:
     clc
     ret
 .no_device:
@@ -1251,7 +1266,26 @@ get_drive_information:
     ;DL = Drive Number
     ret
 read_drive:
+;=========================================
+;Read a specific amount of sectors into memory
+;Expects following Arguments
+;If you read with extended LBA, pass into ECX a ext_lba structure
+;When reading sectors give EDI the address of your buffer
+;When writing sectors give ESI the address of your buffer
+;<> Arguments <>
     ;DL = Drive Number
+    ;DH = EXT_LBA READ (0x0a = yes, 0x0b = no)
+    ;EAX = Sectors
+    ;EDI = Buffer
+    ;ECX = LBA / address of LBA struct
+;<> LBA struct <>
+; ext_lba_struct:
+;     db 0
+;     db 0
+;     db 0
+;     db 0
+;     db 0
+;     db 0
     pusha
     movzx esi, dl
     imul esi, DRIVE_LIST_ENTRY
@@ -1261,18 +1295,1145 @@ read_drive:
     je .ahci
     cmp byte [esi+9], 0xde     ;IDE
     je .ide
-
-
+    cmp byte [esi+9], 0xbe
+    je .usb
+.error:
+    ;no drive found
     popa
     stc
     ret
 .ide:
-    popa
-    clc
-    ret
+    cmp dh, 0x0a
+    je .ide_ext_lba
+
+    cmp dh, 0x0b
+    jne .error
+
+    cmp byte [esi+10], 1
+    je .ide_dma
+
+    mov ebx, eax        ;sectors in EBX
+    mov dx, [esi+6]     ;Base Channel
+    mov al, [esi+4]     ;Master / Slave
+
+    call read_ide_sectors
+    jc .error
+    jmp .done
+
+.ide_ext_lba:
+    mov dx, [esi+6]         ;base channel
+    mov ebx, eax
+    mov al, [esi+4]         ;Master / Slave
+
+    call read_ide_sectors_ext
+    jc .error
+    jmp .done
+.ide_dma:
+    mov ebx, eax
+    mov al, [esi+4]
+    mov ah, [esi+5]
+    mov dx, [esi]
+    mov si, [esi+6]
+
+    call read_ide_dma
+    jc .error
+    jmp .done
 .ahci:
+    call read_ahci
+    jc .error
+    jmp .done
+.usb:
+    jmp .done
+.done:
     popa
     clc
     ret
 write_drive:
+    ;DL = Drive Number
+    ;EAX = sectors
+    ;ESI = Buffer
+    ;ECX = LBA
+    pusha
+    movzx esi, dl
+    imul esi, DRIVE_LIST_ENTRY
+    add esi, DRIVE_LIST_ADDR
+
+    cmp byte [esi+9], 0xaa     ;AHCI
+    je .ahci
+    cmp byte [esi+9], 0xde     ;IDE
+    je .ide
+    cmp byte [esi+9], 0xbe
+    je .usb
+
+.error:
+    popa
+    stc
+    ret
+.ide:
+    cmp dh, 0x0a
+    je .ide_ext_lba
+
+    cmp dh, 0x0b
+    jne .error
+
+    cmp byte [esi+10], 1
+    je .ide_dma
+
+    mov ebx, eax        ;sectors in EBX
+    mov dx, [esi+6]     ;Base Channel
+    mov al, [esi+4]     ;Master / Slave
+    mov esi, edi
+
+    call write_ide_sectors
+    jc .error
+    jmp .done
+
+.ide_ext_lba:
+    mov ebx, eax
+    mov dx, [esi+6]         ;base channel
+    mov al, [esi+4]         ;Master / Slave
+    mov esi, edi
+
+    call write_ide_sectors_ext
+    jc .error
+    jmp .done
+.ide_dma:
+    mov ebx, eax
+    mov dx, [esi]
+    mov ah, [esi+5]
+    mov al, [esi+4]
+    mov si, [esi+6]
+    call write_ide_dma
+    popa
+    clc
+    ret
+.ahci:
+    ;call write_ahci
+    popa
+    clc
+    ret
+.usb:
+    popa
+    clc
+    ret
+.done:
+    popa
+    clc
+    ret
+
+;===========================================ATA PIO MODE===============================================0
+read_ide_sectors:
+    cmp ebx, 0
+    je .reset_disk
+
+    mov [base_channel], dx
+    add dx, 7
+    movzx esi, al       ;store drive (0xa0 / 0xb0)
+.wait:
+    in al, dx
+    test al, 0x80
+    jnz .wait
+    jmp .disk_ok
+.reset_disk:
+    call reset_ata
+    jmp .read_done
+.disk_ok:
+    cmp ebx, 256
+    jb .last_read
+
+    mov dx, [base_channel]
+    add dx, 2       ;sector count
+    xor al, al
+    out dx, al           ;256 sectors
+
+    inc dx
+    mov al, cl           ;lba bits 0-7
+    out dx, al
+
+    inc dx               ;lba bits 8-15
+    mov al, ch
+    out dx, al
+
+    mov eax, ecx
+    shr eax, 16
+
+    inc dx       ;lba bits 16-23
+    out dx, al
+
+    mov dx, si
+    mov al, dl
+    and al, 0x10
+
+    or al, 0xe0
+    or al, ah
+    mov dx, [base_channel]
+    add dx, 6
+    out dx, al          ;drive + lba high
+
+    inc dx
+    mov al, 0x20        ;read command
+    out dx, al
+
+    push ecx
+    mov ecx, 256
+    mov dx, [base_channel]
+    add dx, 7
+.read_loop:
+    in al, dx
+    test al, 0x08
+    jz .read_loop
+
+    push dx
+    mov dx, [base_channel]
+    mov ax, 256     ;512 bytes
+.read_word:
+    push ax
+    in ax, dx
+    stosw
+    pop ax
+    dec ax
+    jnz .read_word
+    pop dx
+    loop .read_loop
+    pop ecx
+    sub ebx, 256
+    add ecx, 256
+    jmp .disk_ok
+
+.last_read:
+    cmp ebx, 0
+    je .read_done
+
+    mov dx, [base_channel]
+    add dx, 2           ;sector count
+    mov al, bl
+    out dx, al
+
+    inc dx              ;lba bits 0-7
+    mov al, cl
+    out dx, al
+
+    inc dx              ;lba bits 8-15
+    mov al, ch
+    out dx, al
+
+    mov eax, ecx
+    shr eax, 16
+
+    inc dx             ;lba bits 16-23
+    out dx, al
+
+    mov dx, si
+    mov al, dl
+    and al, 0x10
+
+    or al, 0xe0
+    or al, ah
+    mov dx, [base_channel]
+    add dx, 6
+    out dx, al          ;drive + lba high
+
+    inc dx
+    mov al, 0x20        ;read command
+    out dx, al
+
+    mov ecx, ebx
+    mov dx, [base_channel]
+    add dx, 7
+.read_loop_last:
+    in al, dx
+    test al, 0x08
+    jz .read_loop_last
+
+    push dx
+    mov dx, [base_channel]
+    mov ax, 256     ;512 bytes
+.read_word_last:
+    push ax
+    in ax, dx
+    stosw
+    pop ax
+    dec ax
+    jnz .read_word_last
+    pop dx
+    loop .read_loop_last
+
+    mov dx, [base_channel]
+    add dx, 7
+    in al, dx
+
+    test al, 0x01
+    jnz .error
+.read_done:
+    clc
+    ret
+.error:
+    stc
+    ret
+
+read_ide_sectors_ext:
+    cmp ebx, 0
+    je .error
+
+    mov [base_channel], dx
+    add dx, 7
+    
+    movzx esi, al       ;store drive (0xa0 / 0xb0)
+.wait:
+    in al, dx
+    test al, 0x80
+    jnz .wait
+.read_ext:
+    cmp ebx, 256
+    jb .ext_last_read
+
+    mov dx, [base_channel]
+    add dx, 2            ;sector count
+    xor al, al
+    out dx, al           ;256 sectors
+
+    inc dx
+    mov al, [ecx+3]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+4]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+5]
+    out dx, al
+
+    mov dx, [base_channel]
+    add dx, 2
+    xor al, al
+    out dx, al
+
+    inc dx
+    mov al, [ecx]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+1]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+2]
+    out dx, al
+
+    mov dx, si
+    mov al, dl
+
+    or al, 0x40         ;Bit 6 - LBA Mode
+    mov dx, [base_channel]
+    add dx, 6
+    out dx, al
+
+    mov dx, [base_channel]
+    add dx, 7
+    mov al, 0x24        ;read 48bit
+    out dx, al
+
+    mov dx, [base_channel]
+    add dx, 7
+
+    push ecx
+    mov ecx, 256
+.ext_read_loop:
+    mov dx, [base_channel]
+    add dx, 7
+
+    in al, dx
+    test al, 0x08
+    jz .ext_read_loop
+
+    mov dx, [base_channel]
+    mov ax, 256     ;512 bytes
+.ext_read_word:
+    push ax
+    in ax, dx
+    stosw
+    pop ax
+    dec ax
+    jnz .ext_read_word
+    loop .ext_read_loop
+    pop ecx
+    sub ebx, 256
+    add dword [ecx], 256
+    adc dword [ecx+4], 0
+    jmp .read_ext
+
+.ext_last_read:
+    cmp ebx, 0
+    je .ext_read_done
+
+    mov dx, [base_channel]
+    add dx, 2       ;sector count
+    mov al, bh
+    out dx, al
+
+    inc dx
+    mov al, [ecx+3]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+4]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+5]
+    out dx, al
+
+    mov dx, [base_channel]
+    add dx, 2
+    mov al, bl
+    out dx, al
+
+    inc dx
+    mov al, [ecx]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+1]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+2]
+    out dx, al
+
+    mov dx, si
+    mov al, dl
+
+    or al, 0x40         ;Bit 6 - LBA Mode
+    mov dx, [base_channel]
+    add dx, 6
+    out dx, al
+
+    inc dx
+    mov al, 0x24        ;read 48bit
+    out dx, al
+
+    mov dx, [base_channel]
+    add dx, 7
+    mov ecx, ebx
+.ext_read_loop_last:
+    mov dx, [base_channel]
+    add dx, 7
+
+    in al, dx
+    test al, 0x08
+    jz .ext_read_loop_last
+
+    mov dx, [base_channel]
+    mov ax, 256     ;512 bytes
+.ext_read_word_last:
+    push ax
+    in ax, dx
+    stosw
+    pop ax
+    dec ax
+    jnz .ext_read_word_last
+    loop .ext_read_loop_last
+
+    mov dx, [base_channel]
+    add dx, 7
+    in al, dx
+
+    test al, 0x01
+    jnz .error
+.ext_read_done:
+    clc
+    ret
+.error:
+    stc
+    ret
+
+
+
+
+
+
+
+
+write_ide_sectors:
+    cmp ebx, 0
+    je .error
+    cmp ebx, 256        ;loading much sectors doesnt work
+    jae .error
+
+    movzx edi, al
+    mov [base_channel], dx
+    add dx, 7
+.wait:
+    in al, dx
+    test al, 0x80
+    jnz .wait
+
+.disk_ready:
+    cmp ebx, 256
+    jb .last_write
+
+    mov dx, [base_channel]
+    add dx, 2            ;sector count
+    xor al, al
+    out dx, al           ;256 sectors
+
+    inc dx               ;lba bits 0-7
+    mov al, cl
+    out dx, al
+
+    inc dx               ;lba bits 8-15
+    mov al, ch
+    out dx, al
+
+    mov eax, ecx
+    shr eax, 16
+
+    inc dx              ;lba bits 16-23
+    out dx, al
+
+    inc dx              ;drive + lba high
+    push dx
+    mov dx, di
+    mov al, dl
+
+    or al, 0xe0
+    or al, ah
+
+    pop dx
+    out dx, al
+
+    inc dx
+    mov al, 0x30        ;write command
+    out dx, al
+    push ecx
+    mov ecx, 256
+
+    mov dx, [base_channel]
+    add dx, 7
+.write_loop:
+    in al, dx
+    test al, 0x08
+    jz .write_loop
+
+    push dx
+    mov dx, [base_channel]
+    mov ax, 256     ;512 bytes
+.write_word:
+    push ax
+    lodsw
+    out dx, ax
+    pop ax
+    dec ax
+
+    jnz .write_word
+    pop dx
+    loop .write_loop
+
+    pop ecx
+    sub ebx, 256
+    add ecx, 256
+    jmp .disk_ready
+
+.last_write:
+    cmp ebx, 0
+    je .write_done
+
+    mov dx, [base_channel]
+    add dx, 2           ;sector count
+    mov al, bl
+    out dx, al
+
+    inc dx              ;lba bits 0-7
+    mov al, cl
+    out dx, al
+
+    inc dx              ;lba bits 8-15
+    mov al, ch
+    out dx, al
+
+    mov eax, ecx
+    shr eax, 16
+
+    inc dx              ;lba bits 16-23
+    out dx, al
+
+    inc dx              ;drive + lba high
+    push dx
+    mov dx, di
+    mov al, dl
+
+    or al, 0xe0
+    or al, ah
+    pop dx
+    out dx, al
+
+    inc dx
+    mov al, 0x30        ;write command
+    out dx, al
+
+    mov dx, [base_channel]
+    add dx, 7
+    mov ecx, ebx
+.write_loop_last:
+    in al, dx
+    test al, 0x08
+    jz .write_loop_last
+
+    push dx
+    mov dx, [base_channel]
+    mov ax, 256     ;512 bytes
+.write_word_last:
+    push ax
+    lodsw
+    out dx, ax
+    pop ax
+
+    dec ax
+    jnz .write_word_last
+    pop dx
+    loop .write_loop_last
+
+    mov dx, [base_channel]
+    add dx, 7
+    in al, dx
+
+    test al, 0x01
+    jnz .error
+
+    mov dx, [base_channel]
+    add dx, 7
+    mov al, 0xe7
+    out dx, al
+.wait_flush:
+    in al, dx
+    test al, 0x80
+    jnz .wait_flush
+.write_done:
+    clc
+    ret
+
+.error:
+    stc
+    ret
+
+
+write_ide_sectors_ext:
+    cmp ebx, 0
+    je .error
+    cmp ebx, 256
+    jae .error
+
+    movzx edi, al
+    mov [base_channel], dx
+    add dx, 7
+
+.wait:
+    in al, dx
+    test al, 0x80
+    jnz .wait
+.ext_write:
+    cmp ebx, 256
+    jb .ext_last_write
+
+    mov dx, [base_channel]
+    add dx, 2       ;sector count
+    xor al, al
+    out dx, al           ;256 sectors
+
+    inc dx
+    mov al, [ecx+3]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+4]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+5]
+    out dx, al
+
+    mov dx, [base_channel]
+    add dx, 2
+    mov al, bl
+    out dx, al
+
+    inc dx
+    mov al, [ecx]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+1]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+2]
+    out dx, al
+
+    inc dx
+    push dx
+    mov dx, di
+    mov al, dl
+
+    and al, 0x10
+    or al, 0x40         ;Bit 6 - LBA Mode
+    pop dx
+    out dx, al
+
+    inc dx
+    mov al, 0x34        ;write 48bit
+    out dx, al
+
+    push ecx
+    mov ecx, 256
+    mov dx, [base_channel]
+    add dx, 7
+.ext_write_loop:
+    in al, dx
+    test al, 0x08
+    jz .ext_write_loop
+
+    push dx
+    mov dx, [base_channel]
+    mov ax, 256     ;512 bytes
+.ext_write_word:
+    push ax
+    lodsw
+    out dx, ax
+    pop ax
+
+    dec ax
+    jnz .ext_write_word
+    pop dx
+    loop .ext_write_loop
+    pop ecx
+
+    sub ebx, 256
+    add dword [ecx], 256
+    adc dword [ecx+4], 0
+    jmp .ext_write
+
+.ext_last_write:
+    cmp ebx, 0
+    je .ext_write_done
+
+    mov dx, [base_channel]
+    add dx, 2       ;sector count
+    mov al, bh
+    out dx, al
+
+    inc dx
+    mov al, [ecx+3]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+4]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+5]
+    out dx, al
+
+    mov dx, [base_channel]
+    add dx, 2
+    mov al, bl
+    out dx, al
+
+    inc dx
+    mov al, [ecx]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+1]
+    out dx, al
+
+    inc dx
+    mov al, [ecx+2]
+    out dx, al
+
+    inc dx
+    push dx
+    mov dx, di
+    mov al, dl
+
+    and al, 0x10
+    or al, 0x40         ;Bit 6 - LBA Mode
+    pop dx
+    out dx, al
+
+    mov dx, [base_channel]
+    add dx, 7
+    mov al, 0x34        ;write 48bit
+    out dx, al
+
+    mov ecx, ebx
+    mov dx, [base_channel]
+    add dx, 7
+.ext_write_loop_last:
+    in al, dx
+    test al, 0x08
+    jz .ext_write_loop_last
+
+    push dx
+    mov dx, [base_channel]
+    mov ax, 256     ;512 bytes
+.ext_write_word_last:
+    push ax
+    mov ax, [esi]
+    out dx, ax
+    add esi, 2
+    pop ax
+
+    dec ax
+    jnz .ext_write_word_last
+    pop dx
+    loop .ext_write_loop_last
+
+    mov dx, [base_channel]
+    add dx, 7
+    mov al, 0xe7
+    out dx, al
+.wait_flush:
+    in al, dx
+    test al, 0x80
+    jnz .wait_flush
+.ext_write_done:
+    clc
+    ret
+.error:
+    stc
+    ret
+
+
+
+;=====================================READ BUSMASTERING DMA============================================
+read_ide_dma:
+    cmp ebx, 127
+    ja .error
+
+    sti
+.wait:
+    hlt
+    cmp byte [ide_running], 1
+    je .wait
+
+    cli
+    mov [bm_base4], dx          ;base register
+    mov [base_channel], si
+    movzx esi, al               ;drive
+
+    mov byte [ide_running], 1   ;block IDE controller
+    sti
+
+    ;set PRDT
+    mov [prdt], edi
+
+    push ax
+    push ebx
+    xor bh, bh
+    mov ax, 512
+    mul bx
+    mov [prdt+4], ax
+    pop ebx
+    pop ax
+
+    cmp ah, 2
+    je .secondary
+
+    mov dx, [bm_base4]
+    add dx, 4
+    mov eax, prdt
+    out dx, eax
+
+    ;set READ bit
+    mov dx, [bm_base4]
+    mov al, 0x08        ;READ
+    out dx, al
+
+    ;clear status
+    mov dx, [bm_base4]
+    add dx, 2
+    in al, dx
+    or al, 0x06
+    out dx, al
+
+    mov eax, ecx
+    shr eax, 24
+    and al, 0x0f
+
+    push ebx
+    mov bx, si
+    and bl, 0x10
+    or al, bl
+    pop ebx
+
+    or al, 0xe0
+    mov dx, [base_channel]
+    add dx, 6
+    out dx, al      ;Master + LBA
+
+    mov dx, [base_channel]
+    add dx, 2
+    mov al, bl           ;sector count
+    out dx, al
+
+    inc dx
+    mov al, cl
+    out dx, al
+
+    inc dx
+    mov al, ch
+    out dx, al
+
+    shr ecx, 16
+
+    inc dx
+    mov al, cl
+    out dx, al
+
+    mov dx, [base_channel]
+    add dx, 7       ;set command
+    mov al, 0xc8    ;read DMA 28bit LBA
+    out dx, al
+
+    mov dx, [bm_base4]
+    mov al, 0x09
+    out dx, al
+
+    clc
+    ret
+.error:
+    stc
+    ret
+
+.secondary:
+    mov dx, [bm_base4]
+    add dx, 12
+    mov eax, prdt
+    out dx, eax
+
+    ;set READ bit
+    mov dx, [bm_base4]
+    add dx, 8
+    mov al, 0x08        ;READ
+    out dx, al
+
+    ;clear status
+    mov dx, [bm_base4]
+    add dx, 10
+    in al, dx
+    or al, 0x06
+    out dx, al
+
+    mov eax, ecx
+    shr eax, 24
+    and al, 0x0f
+
+    push ebx
+    mov bx, si
+    and bl, 0x10
+    or al, bl
+    pop ebx
+
+    or al, 0xe0
+    mov dx, [base_channel]
+    add dx, 6
+    out dx, al      ;Master + LBA
+
+    mov dx, [base_channel]
+    add dx, 2
+    mov al, bl           ;sector count
+    out dx, al
+
+    inc dx
+    mov al, cl
+    out dx, al
+
+    inc dx
+    mov al, ch
+    out dx, al
+
+    shr ecx, 16
+
+    inc dx
+    mov al, cl
+    out dx, al
+
+    mov dx, [base_channel]
+    add dx, 7       ;set command
+    mov al, 0xc8    ;read DMA 28bit LBA
+    out dx, al
+
+    mov dx, [bm_base4]
+    add dx, 8
+    mov al, 0x09
+    out dx, al
+
+    clc
+    ret
+
+write_ide_dma:
+    cmp ebx, 127
+    ja .error
+
+    sti
+    ;check if a DMA transfer is currently active
+.wait:
+    hlt
+    cmp byte [ide_running], 1
+    je .wait
+
+    cli
+    mov [bm_base4], dx
+    mov [base_channel], si
+    movzx esi, al
+    mov byte [ide_running], 1   ;block IDE controller
+    sti
+
+    ;set PRDT
+    mov [prdt], edi
+
+    push ax
+    push ebx
+    xor bh, bh
+    mov ax, 512
+    mul bx
+    mov [prdt+4], ax
+    pop ebx
+    pop ax
+
+    cmp ah, 2
+    je .secondary
+
+    mov dx, [bm_base4]
+    add dx, 4
+    mov eax, prdt
+    out dx, eax
+
+    ;set WRITE bit
+    mov dx, [bm_base4]
+    xor al, al
+    out dx, al
+
+    ;clear status
+    mov dx, [bm_base4]
+    add dx, 2
+    in al, dx
+    or al, 0x06
+    out dx, al
+
+    mov eax, ecx
+    shr eax, 24
+    and al, 0x0f
+
+    push ebx
+    mov bx, si
+    and bl, 0x10
+    or al, bl
+    pop ebx
+
+    or al, 0xe0
+    mov dx, [base_channel]
+    add dx, 6
+    out dx, al      ;Master + LBA
+
+    mov dx, [base_channel]
+    add dx, 2
+    mov al, bl           ;sector count
+    out dx, al
+
+    inc dx
+    mov al, cl
+    out dx, al
+
+    inc dx
+    mov al, ch
+    out dx, al
+
+    shr ecx, 16
+
+    inc dx
+    mov al, cl
+    out dx, al
+
+    mov dx, [base_channel]
+    add dx, 7       ;set command
+    mov al, 0xca    ;write DMA 28bit LBA
+    out dx, al
+
+    mov dx, [bm_base4]
+    mov al, 0x01    ;write
+    out dx, al
+
+    clc
+    ret
+
+.error:
+    stc
+    ret
+
+.secondary:
+    mov dx, [bm_base4]
+    add dx, 12
+    mov eax, prdt
+    out dx, eax
+
+    ;set WRITE bit
+    mov dx, [bm_base4]
+    add dx, 8
+    xor al, al
+    out dx, al
+
+    ;clear status
+    mov dx, [bm_base4]
+    add dx, 10
+    in al, dx
+    or al, 0x06
+    out dx, al
+
+    mov eax, ecx
+    shr eax, 24
+    and al, 0x0f
+
+    push ebx
+    mov bx, si
+    and bl, 0x10
+    or al, bl
+    pop ebx
+
+    or al, 0xe0
+    mov dx, [base_channel]
+    add dx, 6
+    out dx, al      ;Master + LBA
+
+    mov dx, [base_channel]
+    add dx, 2
+    mov al, bl           ;sector count
+    out dx, al
+
+    inc dx
+    mov al, cl
+    out dx, al
+
+    inc dx
+    mov al, ch
+    out dx, al
+
+    shr ecx, 16
+
+    inc dx
+    mov al, cl
+    out dx, al
+
+    mov dx, [base_channel]
+    add dx, 7       ;set command
+    mov al, 0xca    ;write DMA 28bit LBA
+    out dx, al
+
+    mov dx, [bm_base4]
+    add dx, 8
+    mov al, 0x01    ;write
+    out dx, al
+
+    clc
     ret
