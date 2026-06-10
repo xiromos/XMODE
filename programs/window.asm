@@ -1,6 +1,7 @@
-[org 0x2000000]
+;[org 0x2000000]
 bits 32
 
+section .text
 start:
     mov esi, 300
     mov edi, 200
@@ -166,7 +167,7 @@ cmp_cmd:
 
 
 
-
+section .data
 window_packet:
     dd 0            ;foreground color
     dd 0x00ffffff   ;background color

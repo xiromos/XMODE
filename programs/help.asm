@@ -1,6 +1,4 @@
-[org 0x2000000]
-bits 32
-
+section .text
 start:
     mov esi, header
     mov ebx, 0x0003f0fc
@@ -63,6 +61,7 @@ start:
     mov ah, 0x05
     int 0x35
 
+section .data
 header: db '----Standard Commands----', 0x0a, 0
 help: db 'HELP: shows this help message', 0x0a, 0
 clear: db 'CLEAR: clears the screen', 0x0a, 0
