@@ -1021,7 +1021,13 @@ read_ahci:
 ; BYTE 4:  0xDE (Drive Type)
 ; BYTE 5:  Busmastering DMA supported (1 = yes, 0 = no)
 
-
+; USB
+; DWORD 1: Base (OHCI_BASE)
+; BYTE 1: Port Number
+; BYTE 2: Host Controller Interface (0x10 = OHCI, 0x15 = UHCI, 0x20 = EHCI, 0x30 = XHCI)
+; WORD 1: alignment
+; BYTE 3: Alignment
+; BYTE 4: 0xBE (Drive Type)
 ide_init:
     pusha
     ; PCI
@@ -1031,6 +1037,13 @@ ide_init:
     ; BAR3	Secondary Control Base
     ; BAR4	Busmaster IDE Base
 
+    mov dx, 0x3f6
+    xor al, al
+    out dx, al
+
+    mov dx, 0x376
+    xor al, al
+    out dx, al
     ;test primary master
     mov dx, 0x1f0
     mov al, 0xa0
@@ -2200,6 +2213,16 @@ read_ide_dma:
     mov al, 0x09
     out dx, al
 
+.end:
+    cli
+    movzx eax, word [current_task]
+    imul eax, TASK_SIZE
+    add eax, tasks_esp
+
+    mov dword [eax+11], 0x0000df00      ;set attribute: waiting for drive
+    sti
+    int 0x20
+
     clc
     ret
 .error:
@@ -2269,8 +2292,7 @@ read_ide_dma:
     mov al, 0x09
     out dx, al
 
-    clc
-    ret
+    jmp .end
 
 write_ide_dma:
     cmp ebx, 127
@@ -2364,6 +2386,15 @@ write_ide_dma:
     mov dx, [bm_base4]
     mov al, 0x01    ;write
     out dx, al
+
+    cli
+    movzx eax, word [current_task]
+    imul eax, TASK_SIZE
+    add eax, tasks_esp
+
+    mov dword [eax+11], 0x0000df00      ;set attribute: waiting for drive
+    sti
+    int 0x20
 
     clc
     ret
