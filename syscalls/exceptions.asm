@@ -222,6 +222,10 @@ irq0_handler:
     mov ax, 1
 
 .load_next:
+    ;check attributes
+    cmp dword [edi+11], 0
+    jne .check_attributes
+.continue:
     mov [current_task], ax
 
     ;load next task context
@@ -248,6 +252,15 @@ irq0_handler:
     pop ds
     popad
     iretd
+
+.check_attributes:
+    cli
+    hlt
+    cmp dword [edi+11], 0x0000df00
+    je .search_loop     ;skip this task
+
+    ;unknown attribute
+    jmp .continue
 irq1_handler:
     cli
     push ebx
@@ -331,6 +344,10 @@ keyboard_handler:
     push ebx
     push edi
     push ecx
+
+    cmp byte [usb_keyboard_used], 1
+    je .usb_keyboard
+
 .block:
     movzx ecx, word [main_task]
     mov bx, [current_task]
@@ -361,6 +378,41 @@ keyboard_handler:
     sti
     hlt
     jmp .block
+
+.usb_keyboard:
+    movzx ecx, word [main_task]
+    mov bx, [current_task]
+    cmp bx, [main_task]
+    jne .sleep_usb
+
+    cli
+    mov esi, BUFFER_TAIL
+    add esi, ecx
+    mov edi, BUFFER_HEAD
+    add edi, ecx
+    sti
+
+    ;check if buffer was filled with new key
+    push ecx
+    mov ecx, 7
+    repe cmpsb
+    pop ecx
+    je .sleep_usb       ;if buffer is empty than wait
+
+    ;get keys
+    cli
+    hlt
+
+
+    pop ecx
+    pop edi
+    pop ebx
+    iret
+.sleep_usb:
+    sti
+    hlt
+    jmp .usb_keyboard
+
 keyboard_handler2:
     cli
     cmp ah, 0
@@ -392,70 +444,6 @@ keyboard_handler2:
 
 irq12_handler:
     iret
-
-program_sys_handler:
-    cmp ah, 0x01
-    je .test_stop
-    cmp ah, 0x05
-    je .terminate_process
-.test_stop:
-    cli
-    hlt
-.terminate_process:
-    cli
-
-    movzx ecx, word [current_task]
-    imul ecx, TASK_SIZE
-    mov edi, tasks_esp
-    add edi, ecx
-    mov byte [edi], 0xe5
-
-    dec word [task_count]
-
-    mov cx, [current_task]
-    cmp word [main_task], cx
-    jne .skip
-
-    mov word [main_task], 1
-.skip:
-    mov edi, tasks_esp
-    inc word [current_task]
-    movzx ecx, word [max_tasks]
-    cmp word [current_task], cx
-    jbe .check
-
-    mov word [current_task], 1
-    jmp .continue
-.check:
-    imul ecx, TASK_SIZE
-    add edi, ecx
-    cmp byte [edi], 0xe5
-    je .skip
-    cmp byte [edi], 0
-    je .skip
-
-.continue:
-    xor ecx, ecx
-    mov cx, [current_task]
-    imul cx, TASK_SIZE
-    add ecx, tasks_esp
-
-    mov esp, [ecx+15]
-
-    movzx ecx, word [current_task]
-    imul ecx, tasks_kernel_stack_off
-    add ecx, tasks_kernel_stack 
-
-    mov [tss+4], ecx
-
-    pop gs
-    pop fs
-    pop es
-    pop ds
-    popad
-    iret
-    cli
-    hlt
 
 switch_tasks:
     pusha
@@ -573,32 +561,48 @@ switch_tasks:
     popa
     ret
 irq14_handler:
+    cli
     pusha
-
-    mov dx, 0x1f7
-    in al, dx
-
-    mov dx, [bm_base4]
-    add dx, 2
-    in al, dx
-    and al, 0x6
-    out dx, al
-
-    mov al, 0x04
-    out dx, al
 
     ;stop DMA
     mov dx, [bm_base4]
     xor al, al
     out dx, al
-    
-    ;test if error
+
     mov dx, [bm_base4]
     add dx, 2
     in al, dx
-    test al, 0x02
+    mov bl, al
+
+    mov al, 0x06
+    out dx, al
+    
+    mov dx, 0x1f7
+    in al, dx
+
+    ;test if error
+    test bl, 0x02
     jnz .error
 
+    cmp byte [ide_running], 1
+    jne .done
+    mov byte [ide_running], 0
+
+    movzx eax, word [current_task]
+    imul eax, TASK_SIZE
+    add eax, tasks_esp
+    movzx edx, word [max_tasks]
+.loop:
+    cmp dword [eax+11], 0x0000df00
+    je .found
+    add eax, TASK_SIZE
+    dec edx
+    jnz .loop
+    jmp .done
+.found:
+    mov dword [eax+11], 0       ;remove 'wait for drive' attribute
+
+.done:
     mov al, 0x20
     out 0xa0, al
     out 0x20, al
@@ -616,13 +620,74 @@ irq14_handler:
     popa
     iret
 
+irq15_handler:
+    cli
+    pusha
+
+    mov dx, 0x177
+    in al, dx
+
+    mov dx, [bm_base4]
+    add dx, 0x0a
+    in al, dx
+    mov bl, al
+
+    mov al, 0x06
+    out dx, al
+
+    ;stop DMA
+    mov dx, [bm_base4]
+    add dx, 8
+    xor al, al
+    out dx, al
+    
+    ;test if error
+    test bl, 0x02
+    jnz .error
+
+    cmp byte [ide_running], 1
+    jne .done
+    mov byte [ide_running], 0
+
+    movzx eax, word [current_task]
+    imul eax, TASK_SIZE
+    add eax, tasks_esp
+    movzx edx, word [max_tasks]
+.loop:
+    cmp dword [eax+11], 0x0000df00
+    je .found
+    add eax, TASK_SIZE
+    dec edx
+    jnz .loop
+    jmp .done
+.found:
+    mov dword [eax+11], 0       ;remove 'wait for drive' attribute
+
+.done:
+    mov al, 0x20
+    out 0xa0, al
+    out 0x20, al
+    mov byte [ide_running], 0
+    popa
+    iret
+
+.error:
+    mov al, '%'
+    call print_char
+    mov al, 0x20
+    out 0xa0, al
+    out 0x20, al
+    mov byte [ide_running], 0
+    popa
+    iret
 
 ahci_interrupt_handler:
+    cli
     pusha
     mov al, '!'
     call print_char
-    mov eax, [abar]       ;IS
-    mov ebx, [eax+8]
+    mov eax, [abar]
+    mov ebx, [eax+8]        ;IS
     mov [eax+8], ebx
 
     mov esi, ahci_device_list_addr
@@ -640,5 +705,71 @@ ahci_interrupt_handler:
     out 0xa0, al
     out 0x20, al
 
+    popa
+    iret
+
+ohci_interrupt_handler:
+    cli
+    pusha
+    mov eax, [ohci_base]
+    mov ebx, [eax+12]       ;interrupt status
+    mov [eax+12], ebx
+
+    test ebx, 2
+    jz .skip_keyboard
+
+    mov edx, [eax+0x30]         ;read DoneHead
+    mov dword [eax+0x30], 0     ;clear DoneHead to unblock controller
+
+    mov ebx, td_empty
+    mov [usb_keyboard_td+8], ebx
+    mov ebx, usb_keyboard_buffer
+    mov [usb_keyboard_td+4], ebx
+    mov ebx, usb_keyboard_buffer+7
+    mov [usb_keyboard_td+12], ebx
+
+    mov ebx, [usb_keyboard_td]
+    and ebx, 0x0fffffff
+    or ebx, (15 << 28)      ;mark TD as Not Accessed (0x0F)
+    mov [usb_keyboard_td], ebx
+
+    mov ebx, usb_keyboard_td
+    mov [usb_keyboard_ed+8], ebx
+    mov ebx, td_empty
+    mov [usb_keyboard_ed+4], ebx
+
+    ;store keys
+    movzx edi, word [main_task]
+    mov ebx, edi
+
+    imul edi, KEY_BUFFER_SIZE
+    add edi, KEY_BUFFER
+    movzx ecx, byte [BUFFER_HEAD+ebx]
+    add edi, ecx
+
+    mov esi, usb_keyboard_buffer
+    mov al, [esi]
+    add esi, 2
+
+    mov [edi], al
+    add edi, 1
+
+    mov ecx, 6
+    repe movsb
+    
+    movzx ecx, byte [BUFFER_HEAD+ebx]
+    add ecx, 7
+    and ecx, 0xff
+    mov [BUFFER_HEAD+ebx], cl
+    ; movzx ebx, byte [usb_keyboard_buffer+2]
+    ; test ebx, ebx
+    ; jz .skip_keyboard
+
+    ; mov al, [usb_keymap+ebx]
+    ; call print_char
+.skip_keyboard:
+    mov al, 0x20
+    out 0xa0, al
+    out 0x20, al
     popa
     iret
