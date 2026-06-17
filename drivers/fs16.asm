@@ -7,7 +7,17 @@
 ;AH = 0x05: delete a file                                   input: ESI = filename                                           output: CF if error
 ;AH = 0x06: copy file from dir to subdir                    input: ESI = filename, EDI = directory                          output: CF if error
 ;AH = 0x07: copy file to another disk
-;AH = 0x08: load program into memory                        input: ESI = program name, EDI = adress in memory               output: CF if error
+;AH = 0x08: load program into memory                        input: ESI = program name, EDI = address in memory               output: CF if error
+
+;AH = 0x0A: load file from not-root directory               input: ESI = file name, EDI = address where to load, EDX = address from where to load, BL = drive number       output: CF if error 
+; Drive Numbers:
+;     0 = First Floppy
+;     1 = Second Floppy
+;     2 = First HDD / SSD / USB Flash Drive
+;     3 = Second HDD / SSD / USB Flash Drive
+;     ...
+;     25 = CD
+;     0xFF = Boot Drive
 ;---------------------------------------------------------------------
 ;Copyright (C) 2026 Technodon
 ;=====================================================================
@@ -111,6 +121,11 @@ fs16_handler:
     je fs16_copy_file
     cmp ah, 0x08
     je fs16_load_program
+    cmp ah, 0x0a
+    je fs16_load_file
+    cmp ah, 0x20
+    je fs16_change_drive
+    or dword [esp+8], 1
     iret
  
 fs16_get_file_list:
@@ -559,3 +574,199 @@ fs16_load_program:
     popa
     or dword [esp+8], 1
     iret
+
+fs16_change_drive:
+    pusha
+    mov edx, [esi]  ;get drive number
+    mov [.drive_number], dl
+    mov dh, 0x0b    ;No extended LBA
+    mov eax, 1      ;read 1 sector
+    xor ecx, ecx    ;LBA 0
+    mov edi, 0x7c00
+    call read_drive
+    jc .error
+
+    mov ah, 0x01
+    mov esi, .fat16_str
+    mov edi, 0x7c00+54
+    mov ecx, 8
+    repe cmpsb
+    jne .error
+
+    mov edi, 0x7c00
+
+    mov ax, [edi+11]
+    mov [bytes_per_sec], ax
+    mov al, [edi+13]
+    mov [sec_per_cluster], al
+    mov ax, [edi+14]
+    mov [reserved_sectors], ax
+    mov al, [edi+16]
+    mov [fat_num], al
+    mov ax, [edi+17]
+    mov [root_entries], ax
+    mov ax, [edi+19]
+    mov [total_sectors], ax
+    mov ax, [edi+22]
+    mov [fat_size], ax
+    mov eax, [edi+28]
+    mov [hidden_sectors], eax
+    mov eax, [edi+32]
+    mov [total_sectors32], eax
+    
+    push ecx
+    push eax
+    push edi
+    mov ecx, 0x3000/4
+    mov edi, 0x4000
+    xor eax, eax
+    rep stosd
+
+    pop edi
+    pop eax
+    pop ecx
+
+    movzx eax, word [fat_size]
+    cmp eax, 25
+    jbe .next
+    mov eax, 25     ;load only the first 25 sectors of the FAT
+.next:
+    movzx ecx, word [reserved_sectors]
+    add ecx, [hidden_sectors]
+    mov dl, [.drive_number]
+    mov dh, 0x0b
+    mov edi, 0x4000
+    call read_drive
+    xor ah, ah
+    jc .error
+    
+    xor edx, edx
+    movzx eax, word [root_entries]
+    imul eax, 32
+    movzx ebx, word [bytes_per_sec]
+    div ebx
+    mov [root_sectors], ax
+
+    movzx ebx, word [reserved_sectors]
+    xor ecx, ecx
+    movzx cx, byte [fat_num]
+    imul cx, [fat_size]
+    add ecx, ebx
+    add ecx, [hidden_sectors]
+    mov [root_start], cx
+
+    push ecx
+    push eax
+    push edi
+    mov ecx, 0x4000/4
+    xor edi, edi
+    xor eax, eax
+    rep stosd
+
+    pop edi
+    pop eax
+    pop ecx
+
+    xor edi, edi
+    mov dh, 0x0b
+    mov dl, [.drive_number]
+    call read_drive
+    xor ah, ah
+    jc .error
+
+    mov ax, [root_start]
+    add ax, [root_sectors]
+    mov [data_start], ax
+
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+
+.error:
+    ;AH = 0x00: Disk Error
+    ;AH = 0x01: Not FAT16 formatted
+    mov [.error_num], ah
+    popa
+    or dword [esp+8], 1
+    mov ah, [.error_num]
+    xor al, al
+    iret
+.fat16_str: db "FAT16   "
+.drive_number: db 0
+.error_num: db 0
+
+fs16_load_file:
+    pusha
+    push edi
+    mov edi, edx
+    mov dx, [subdir_entries]
+
+    cmp bl, 0xff
+    je .boot_drive
+    mov [.drive_number], bl
+    jmp .loop
+.boot_drive:
+    mov bl, [boot_drive]
+    mov [.drive_number], bl
+.loop:
+    push edi
+    push esi
+    mov ecx, 11
+    repe cmpsb
+    pop esi
+    pop edi
+    je .found
+
+    add edi, 32
+    dec dx
+    jnz .loop
+
+    pop edi
+    popa
+    or dword [esp+8], 1
+    iret
+
+.found:
+    mov ax, [edi+0x1a]
+    mov [cluster16], ax
+    pop edi
+.load_loop:
+    movzx eax, word [cluster16]
+    call cluster_to_sec
+
+    movzx ecx, ax
+    movzx eax, byte [sec_per_cluster]
+    mov dl, [.drive_number]
+    mov dh, 0x0b
+    call read_drive
+    jc .error
+
+    movzx ebx, word [bytes_per_sec]
+    movzx eax, byte [sec_per_cluster]
+    imul eax, ebx
+    add edi, eax
+
+
+    movzx eax, word [cluster16]
+    shl eax, 1
+    mov ebx, eax
+    mov esi, fat_addr
+    add esi, ebx
+    movzx eax, word [esi]
+    mov [cluster16], ax
+
+    cmp ax, 0
+    je .error
+
+    cmp ax, 0xfff8
+    jb .load_loop
+
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+.error:
+    popa
+    or dword [esp+8], 1
+    iret
+
+.drive_number: db 0
