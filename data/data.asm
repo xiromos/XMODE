@@ -93,8 +93,8 @@ width       equ 1024
 height      equ 768
 max_rows    equ 48      ;768 / 16
 
-real_width: dd 0
-real_height: dd 0
+real_width: dd 1024
+real_height: dd 768
 
 bpp: db 0
 pitch: dd 0
@@ -140,23 +140,31 @@ hex8_out: db '0x00000000', 0
 mmap_buffer     equ 0x7e00  ;512 bytes after bootloader
 mmap_entries: dd 0
 mmap_str: db 'Memory Map:           1 - Usable / 2 - Reserved', 0
-memmap_str: db 'mmap', 0
+memmap_str: db 'MMAP', 0
 mmap_bytes_per_entry: db 'Bytes per Entry: ', 0
 ;commands
 help_msg: db 'In progress...', 0
-help_str: db 'help', 0
-clear_str: db 'clear', 0
-ls_str: db 'ls', 0
-read_str: db 'read', 0
-del_str: db 'del', 0
-rename_str: db 'rename', 0
-write_str: db 'write', 0
-tasklist_str: db 'tasklist', 0
-pci_str: db 'pci', 0
-taskkill_str: db 'taskkill', 0
-ahci_str: db 'ahci', 0
-lsdisk_str: db 'lsdisk', 0
-command_buffer: db 0 dup(50)
+help_str: db 'HELP', 0
+clear_str: db 'CLEAR', 0
+ls_str: db 'LS', 0
+read_str: db 'READ', 0
+del_str: db 'DEL', 0
+rename_str: db 'RENAME', 0
+write_str: db 'WRITE', 0
+tasklist_str: db 'TASKLIST', 0
+pci_str: db 'PCI', 0
+taskkill_str: db 'TASKKILL', 0
+ahci_str: db 'AHCI', 0
+lsdisk_str: db 'LSDISK', 0
+cdisk_str: db 'CDISK', 0
+osdev_discord_str: db 'OSDEVDISCORD', 0
+usb_str: db 'USB', 0
+bgcolor_str: db 'BGCOLOR', 0
+command_buffer: db 50 dup(0)
+setbgcolor_helpmsg: db 'Set Background Color.', 0x0a,
+                    db 'Usage: ', 0
+setbgcolor_helpmsg2: db 'bgcolor #abcdef', 0
+configs_load_err: db '> Error while applying config files. Loaded standard configs', 0
 ;disk
 fs_loading_str: db '> Loading FAT16...', 0
 disk_lba:           ;extended read/write needs a structure which points to the LBA
@@ -223,8 +231,121 @@ sata_device_str: db 'SATA Device', 0
 ide_device_str: db 'IDE Hard Disk', 0
 usb_storage_str: db 'USB Mass Storage Device', 0
 
+
+ohci_found: db 0
+ahci_found: db 0
+ide_found: db 0
+
+
+ohci_base: dd 0
+hcca                    equ 0x102500              ;Host Controller Communications Area, offset 9472B (after 1. AHCI Port Memory Data)
+USB_DEVICE_LIST         equ 0x105500              ;offset 21760B (after 2. AHCI Port Memory Data)
+OHCI_DRIVER_ADDR        equ 0x61000
+DIR_DRIVERS_ADDR        equ 0x60000
+;0x00: Unknown
+;0x01: Keyboard
+;0x02: Mouse
+;0x03: USB Stick
+;0x04: USB 1.1 floppy
+;0x05: Printer
+;0x06: USB Hub
+;0x07: Fast External SSD
+;0xffffffff: error
+;0xeeeeeeee: end of list
+usb_list_offset: dd 0
+usb_unknown_str: db 'Unknown device', 0
+usb_keyboard_str: db 'Keyboard', 0
+usb_mouse_str: db 'Mouse', 0
+usb_floppy_str: db 'USB 1.1 floppy drive', 0
+usb_stick_str: db 'USB Flash Drive', 0
+usb_printer_str: db 'Printer', 0
+usb_hub_str: db 'USB Hub', 0
+usb_extdrive_str: db 'External SSD / HDD', 0
+usb_error_str: db 'Error while detecting this device', 0
+usb_list_header: db '<> List of detected USB devices <> ', 0
+align 16
+control_ed:                           ;Endpoint Desciptor
+    dd 0    ;control
+    dd 0    ;TD queue tail
+    dd 0    ;TD queue head
+    dd 0    ;Next ED
+td_setup:
+    dd 0
+    dd 0
+    dd 0
+    dd 0
+td_data:
+    dd 0
+    dd 0
+    dd 0
+    dd 0
+td_status:
+    dd 0
+    dd 0
+    dd 0
+    dd 0
+td_empty: times 4 dd 0
+usb_keyboard_ed: times 4 dd 0
+usb_keyboard_td: times 4 dd 0
+
+ohci_setup_packet:
+    db 0x80          ; Device to Host
+    db 0x06          ; GET_DESCRIPTOR
+
+    dw 0x0100        ; Device Descriptor
+    dw 0
+    dw 18
+set_address_packet:
+    db 0x00
+    db 0x05
+    dw 0             ; Address (off 2)
+    dw 0
+    dw 0
+ohci_descriptor_buffer: times 128 db 0
+usb_keyboard_buffer: times 8 db 0
+usb_keyboard_used: db 0
+
+usb_keybuffer: dd 0
+data_td_ptr: dd 0
+status_td_ptr: dd 0
+setup_td_ptr: dd 0
+
+usb_keyboard_edptr: dd 0
+usb_keyboard_tdptr: dd 0
+
+usb_keymap:
+    times 4 db 0
+    db 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'y', 'k', 'l',
+    db 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'
+    db '1', '2', '3', '4', '5', '6', '7', '8', '9', '0'
+    db 0x0a     ;Enter
+    db 0x1b     ;ESC
+    db 0x08     ;Backspace
+    db 0x20     ;Space
+    db '-'
+    db '='
+    db '['
+    db ']'
+    db '\'
+    db 0
+    db ';'
+    db 39       ;'
+    db '`'
+    db ','
+    db '.'
+    db '/'
+
+    db 0    ;Caps Lock
+
+    db 12 dup(0)    ;F1 - F12
+    db 9 dup(0)
+    db 4 dup(0)
+    times (256-83) db 0
+
 ide_running: db 0
 dma_done: db 0
+base_channel: dw 0
+boot_drive: db 0
 cur_bmbase_str: db '< BM Base: ', 0
 sec_per_cluster: db 0
 reserved_sectors: dw 0
@@ -243,7 +364,7 @@ subdir_entries: dw 0
 
 root_addr       equ 0
 fat_addr        equ 0x4000
-program_addr    equ 0x2000000
+program_addr    equ 0x1000000
 program_addr_off equ 0x20000
 dir_str: db '<DIR>', 0
 sys_str: db '<SYS>', 0
@@ -268,10 +389,22 @@ write_success: db 'File saved!', 0
 write_failure: db 'Error while writing file', 0
 write_prompt: db 'Enter file content (ESC = save):', 0
 
+disk_changed_str: db 'Drive switched successfully', 0
+disk_changed_err: db 'Error while switching drive. Error code: ', 0
+
 file_test_txt db        "TEST    TXT"
 program_help_bin db     "HELP    BIN"
 shell_task_str db       "SHELL   SYS"
+program_init_sys db     "INIT    SYS"
 
+dir_configs_str db      "XCONFIGS   "
+file_bgcolor_cfg db     "BGCOLOR CFG"
+dir_drivers_str db      "DRIVERS    "
+file_ohci_sys db        "OHCI    SYS"
+
+CONFIG_DIR_BUFFER equ   0x20000
+CONFIGS_FILE_BUFFER equ 0x20500
+osdev_discord_msg: db 'Thanks to the OSDev Discord Server for muting me saying my opinion', 0
 ;windows and multitasking
 windows_list:
     times 10 db 0
@@ -337,3 +470,11 @@ switch_tasks_str: db 'Switch Tasks - ESC to quit', 0
 switch_tasks_win_id: dw 0
 switch_tasks_msg: db 'Available Tasks: ', 0
 task_not_found: db 'Task not found', 0
+task_list_header: db 'PID   Name', 0
+
+SYMBOL_TABLE_ADDR           equ 0xef0000
+RELOCATION_TABLE_CONTENTS   equ 0xeffe00
+
+program_address: dd 0
+section_text_str: db '.text', 0, 0, 0
+coff_load_err: db 'Error while loading COFF File', 0
