@@ -12,7 +12,7 @@ Here you can read how to install XMODE in Xiromos: https://github.com/xiromos/Xi
 **help**: show available commands<br>
 **clear**: clear screen<br>
 **mmap**: shows memory map<br>
-**pci**: shows all PCI devices
+**pci**: shows all PCI devices<br>
 **usb**: shows all USB devices (OHCI only, UHCI planned)
 
 ### Filesystem
@@ -26,7 +26,7 @@ Here you can read how to install XMODE in Xiromos: https://github.com/xiromos/Xi
 ## Features
 
 - FAT16
-- VESA Video Mode: 1024x768px
+- VESA Video Mode: 1024x768px (BIOS VBE or GOP)
 - windows / window manager
 - own assembler
 - preemptive multitasking
