@@ -380,29 +380,40 @@ keyboard_handler:
     jmp .block
 
 .usb_keyboard:
-    movzx ecx, word [main_task]
-    mov bx, [current_task]
-    cmp bx, [main_task]
+    movzx ebx, word [main_task]
+    movzx ecx, word [current_task]
+    cmp cx, [main_task]
     jne .sleep_usb
 
     cli
-    mov esi, BUFFER_TAIL
-    add esi, ecx
-    mov edi, BUFFER_HEAD
-    add edi, ecx
+    mov al, [BUFFER_TAIL+ebx]
+    mov cl, [BUFFER_HEAD+ebx]
     sti
 
-    ;check if buffer was filled with new key
-    push ecx
-    mov ecx, 7
-    repe cmpsb
-    pop ecx
-    je .sleep_usb       ;if buffer is empty than wait
+    cmp al, cl
+    je .sleep_usb
 
-    ;get keys
-    cli
-    hlt
 
+    mov edi, ebx
+    imul edi, KEY_BUFFER_SIZE
+    add edi, KEY_BUFFER
+
+    movzx ecx, byte [BUFFER_TAIL+ebx]
+    add edi, ecx
+
+    ;mov dl, [edi]   ;modifier
+
+    push ebx
+    movzx ebx, byte [edi+1] ;Key1
+    movzx eax, byte [usb_keymap+ebx]
+    pop ebx
+
+    add ecx, 7
+    and ecx, 0xff
+    mov [BUFFER_TAIL+ebx], cl
+
+    cmp byte [edi+1], 0
+    je .sleep_usb
 
     pop ecx
     pop edi
@@ -721,22 +732,43 @@ ohci_interrupt_handler:
     mov edx, [eax+0x30]         ;read DoneHead
     mov dword [eax+0x30], 0     ;clear DoneHead to unblock controller
 
-    mov ebx, td_empty
-    mov [usb_keyboard_td+8], ebx
-    mov ebx, usb_keyboard_buffer
-    mov [usb_keyboard_td+4], ebx
-    mov ebx, usb_keyboard_buffer+7
-    mov [usb_keyboard_td+12], ebx
+    ; mov ebx, td_empty
+    ; mov [usb_keyboard_td+8], ebx
+    ; mov ebx, usb_keyboard_buffer
+    ; mov [usb_keyboard_td+4], ebx
+    ; mov ebx, usb_keyboard_buffer+7
+    ; mov [usb_keyboard_td+12], ebx
 
-    mov ebx, [usb_keyboard_td]
+    ; mov ebx, [usb_keyboard_td]
+    ; and ebx, 0x0fffffff
+    ; or ebx, (15 << 28)      ;mark TD as Not Accessed (0x0F)
+    ; mov [usb_keyboard_td], ebx
+
+    ; mov ebx, usb_keyboard_td
+    ; mov [usb_keyboard_ed+8], ebx
+    ; mov ebx, td_empty
+    ; mov [usb_keyboard_ed+4], ebx
+
+    mov ebx, td_empty
+    mov edi, [usb_keyboard_tdptr]
+
+    mov [edi+8], ebx
+    mov ebx, [usb_keybuffer]
+    mov [edi+4], ebx
+    mov ebx, [usb_keybuffer]
+    add ebx, 7
+    mov [edi+12], ebx
+
+    mov ebx, [edi]
     and ebx, 0x0fffffff
     or ebx, (15 << 28)      ;mark TD as Not Accessed (0x0F)
-    mov [usb_keyboard_td], ebx
+    mov [edi], ebx
 
-    mov ebx, usb_keyboard_td
-    mov [usb_keyboard_ed+8], ebx
+    mov ebx, [usb_keyboard_tdptr]
+    mov edi, [usb_keyboard_edptr]
+    mov [edi+8], ebx
     mov ebx, td_empty
-    mov [usb_keyboard_ed+4], ebx
+    mov [edi+4], ebx
 
     ;store keys
     movzx edi, word [main_task]
@@ -747,21 +779,23 @@ ohci_interrupt_handler:
     movzx ecx, byte [BUFFER_HEAD+ebx]
     add edi, ecx
 
-    mov esi, usb_keyboard_buffer
+    mov esi, [usb_keybuffer]
     mov al, [esi]
     add esi, 2
 
     mov [edi], al
     add edi, 1
 
+    cld
     mov ecx, 6
-    repe movsb
+    rep movsb
     
     movzx ecx, byte [BUFFER_HEAD+ebx]
     add ecx, 7
     and ecx, 0xff
     mov [BUFFER_HEAD+ebx], cl
-    ; movzx ebx, byte [usb_keyboard_buffer+2]
+    ; mov ebx, [usb_keybuffer]
+    ; movzx ebx, byte [ebx+2]
     ; test ebx, ebx
     ; jz .skip_keyboard
 
