@@ -67,10 +67,15 @@ delete_cursor:
     sub dword [cur_x], 8
     ret
 exec_cmd:
+    mov esi, command_buffer
+    call string_uppercase
+    mov esi, [argument]
+    call string_uppercase
+
     mov edi, command_buffer
     mov esi, help_str
     call cmp_str
-    jc .show_help
+    ;jc .show_help
 
     mov edi, command_buffer
     mov esi, clear_str
@@ -115,7 +120,7 @@ exec_cmd:
     mov edi, command_buffer
     mov esi, taskkill_str
     call cmp_str
-    jc kill_task
+    jc kill_task_sh
 
     mov edi, command_buffer
     mov esi, pci_str
@@ -132,10 +137,87 @@ exec_cmd:
     call cmp_str
     jc list_drives
 
+    mov edi, command_buffer
+    mov esi, cdisk_str
+    call cmp_str
+    jc change_drive
+
+    mov edi, command_buffer
+    mov esi, osdev_discord_str
+    call cmp_str
+    jc .osdev_dc
+
+    mov edi, command_buffer
+    mov esi, usb_str
+    call cmp_str
+    jc show_usb_devices
+
+    mov edi, command_buffer
+    mov esi, bgcolor_str
+    call cmp_str
+    jc .set_bgcolor
+
     jmp .exec_program
     ret
 .ahci:
     call ahci_init
+    ret
+.osdev_dc:
+    mov esi, osdev_discord_msg
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    ret
+.set_bgcolor:
+    mov esi, [argument]
+    call string_uppercase
+
+    cmp word [esi], '-H'
+    je .set_bgcolor_help
+
+    xor ebx, ebx
+.loop:
+    lodsb
+
+    cmp al, 0
+    je .done_convert
+
+    cmp al, '0'
+    jb .loop
+    cmp al, '9'
+    jbe .number
+
+    cmp al, 'A'
+    jb .loop
+    cmp al, 'F'
+    jbe .string
+
+    jmp .loop
+
+.number:
+    sub al, '0'
+    jmp .add
+.string:
+    sub al, 0x41 - 10
+.add:
+    shl ebx, 4
+    movzx edx, al
+    or ebx, edx
+    jmp .loop
+
+.set_bgcolor_help:
+    mov esi, setbgcolor_helpmsg
+    mov ebx, 0x00ffffff
+    call print_string
+    mov esi, setbgcolor_helpmsg2
+    mov ebx, COLOR_GREEN
+    call print_string
+
+    call print_newline
+    ret
+.done_convert:
+    mov [bgcolor], ebx
+    call clear_screen
     ret
 .exec_program:
     mov esi, [argument]
@@ -182,9 +264,31 @@ exec_cmd:
     imul edi, ecx
     add edi, program_addr
     int 0x33
+    jnc .found_xme_executable
+
+    mov esi, read_buffer
+    mov byte [esi+8], 'O'
+    mov byte [esi+9], 'B'
+    mov byte [esi+10], 'J'
+    mov edi, program_addr_off
+    imul edi, ecx
+    add edi, program_addr
+    int 0x33
     jc .exec_prog_err
 
+    call load_coff_obj
+    jnc .found_prog
+
+    mov esi, coff_load_err
+    mov ebx, COLOR_RED
+    call print_string
+    call print_newline
+    ret
+.found_xme_executable:
+    ;call load_xme
 .found_prog:
+    mov [program_address], edi
+
     mov ax, [max_tasks]
     cmp word [task_count], ax
     jae .too_much_tasks
@@ -247,6 +351,8 @@ exec_cmd:
     imul eax, ecx
     add eax, program_addr
 
+    mov eax, [program_address]
+
     push ss
     push esp
     ;pushfd                 ;bug - if program does infinite loop -> freeze
@@ -274,15 +380,6 @@ exec_cmd:
 
     ;call far code_off_user:program_addr
     mov esp, [kernel_stack]
-.leap:
-    mov ecx, 25
-.loop:
-    mov ebx, COLOR_RED
-    mov al, '#'
-    call print_char
-    nop
-    dec ecx
-    jnz .loop
     ret
 .too_much_tasks:
     mov esi, task_limit
@@ -865,6 +962,11 @@ show_mmap:
 
 
 show_tasks:
+    mov esi, task_list_header
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    
     call print_newline
     mov esi, tasks_esp
     add esi, TASK_SIZE     ;skip task 0
@@ -885,7 +987,7 @@ show_tasks:
     mov al, 0x20
     call print_char
     pop eax
-    
+
     mov cx, 11
     push esi
     push eax
@@ -907,7 +1009,7 @@ show_tasks:
     ret
 
 
-kill_task:
+kill_task_sh:
     mov esi, [argument]
     mov edi, read_buffer
     mov ecx, 11
@@ -940,11 +1042,9 @@ kill_task:
 .found:
     mov bx, ax
     mov ah, 0x06
-    call terminate_task_extern
+    call kill_task
     ret
 
-terminate_task_extern:
-    ret
 show_pci:
     ;Byte:  BUS
     ;Byte:  DEVICE
@@ -1159,3 +1259,162 @@ list_drives:
     pop eax
     pop esi
     jmp .continue
+
+
+
+
+change_drive:
+    mov esi, [argument]
+    call string_uppercase
+
+    cmp byte [esi], 0x41
+    jb .error
+    cmp byte [esi], 0x5a
+    ja .error
+
+    mov al, [esi]
+    sub al, 0x41
+    mov [esi], al
+
+    mov ah, 0x20
+    int 0x33
+    jc .error
+
+    mov esi, disk_changed_str
+    mov ebx, COLOR_GREEN
+    call print_string
+    call print_newline
+    ret
+.error:
+    push ax
+    mov esi, disk_changed_err
+    mov ebx, COLOR_RED
+    call print_string
+    pop ax
+    movzx edx, ax
+    call print_hex4
+
+    call print_newline
+    ret
+
+show_usb_devices:
+    pusha
+    mov esi, usb_list_header
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    call print_newline
+
+    mov esi, USB_DEVICE_LIST
+    mov cl, 1
+.loop:
+    lodsb
+    cmp al, 0
+    je .unknown
+    cmp al, 1
+    je .keyboard
+    cmp al, 2
+    je .mouse
+    cmp al, 3
+    je .usb_stick
+    cmp al, 4
+    je .floppy
+    cmp al, 5
+    je .printer
+    cmp al, 6
+    je .usb_hub
+    cmp al, 7
+    je .external_drive
+    cmp al, 0xff
+    je .error
+
+    cmp al, 0xee
+    je .done
+.next:
+    inc cl
+    add esi, 4
+    jmp .loop
+
+.unknown:
+    push esi
+    mov esi, usb_unknown_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    pop esi
+    jmp .next
+.keyboard:
+    push esi
+    mov esi, usb_keyboard_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    pop esi
+    jmp .next
+.mouse:
+    push esi
+    mov esi, usb_mouse_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    pop esi
+    jmp .next
+.usb_stick:
+    push esi
+    movzx eax, cl
+    call print_dec
+    mov al, ':'
+    call print_char
+    mov al, 0x20
+    call print_char
+
+    mov esi, usb_stick_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    pop esi
+    jmp .next
+.floppy:
+    push esi
+    mov esi, usb_floppy_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    pop esi
+    jmp .next
+.printer:
+    push esi
+    mov esi, usb_printer_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    pop esi
+    jmp .next
+.usb_hub:
+    push esi
+    mov esi, usb_hub_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    pop esi
+    jmp .next
+.external_drive:
+    push esi
+    mov esi, usb_extdrive_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    pop esi
+    jmp .next
+.error:
+    push esi
+    mov esi, usb_error_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    pop esi
+    jmp .next
+.done:
+    popa
+    ret
+%include "shell/coff_loader.asm"
