@@ -177,6 +177,7 @@ main:
     add edi, eax
     mov dword [edi], 0x0014c4be
     loop .loop
+
     ;0xFFFFFFFF = white
     ;0x00FF0000 = red
     ;0x11111111 = dark gray
@@ -203,10 +204,34 @@ main:
     mov edx, [bm_base]
     call print_hex8
 
+    mov ebx, init_system
+    mov esi, program_init_sys
+    mov ah, 0x03
+    int 0x35
+
+    ;cli
+    ;hlt
+;     mov al, '+'
+;     call print_char
+; .leap1:
+;     hlt
+;     jmp .leap1
+
+; .carry:
+;     mov al, 'C'
+;     call print_char
+;     cli
+;     hlt
     mov al, 0x20
     call print_char
 
     mov edx, [abar]
+    call print_hex8
+
+    mov al, 0x20
+    call print_char
+
+    mov edx, [ohci_base]
     call print_hex8
     call print_newline
 
@@ -226,7 +251,7 @@ main:
     ;int 0x32
 
     xor al, al
-    call read_ahci
+    ;call read_ahci
     ;cli
     ;hlt
     call get_bpb_data
@@ -260,11 +285,6 @@ main:
     add ax, [root_sectors]
     mov [data_start], ax
 
-    mov esi, fs_loading_str
-    mov ebx, 0x00ffffff
-    call print_string
-    call print_newline
-
     call load_root
     call load_fat
 
@@ -275,13 +295,125 @@ main:
     mov ebx, 32
     div ebx
     mov [subdir_entries], ax
+
+    ;init system and drivers
+;     cmp byte [ide_found], 1
+;     jne .skip_ide
+;     call ide_init
+
+; .skip_ide:
+;     cmp byte [ahci_found], 1
+;     jne .skip_ahci
+;     call ahci_init
+
+; .skip_ahci:
+    cmp byte [ohci_found], 1
+    jne .skip_ohci
+
+    ;load drivers directory
+    mov esi, dir_drivers_str
+    mov edi, DIR_DRIVERS_ADDR
+    mov ah, 0x02
+    int 0x33
+    jnc .load_ohci
+
+    call print_newline
+    mov esi, .error_load_drivers
+    mov ebx, COLOR_RED
+    call print_string
+    cli
+    hlt
+.error_load_drivers: db 'Error loading Drivers directory (either not found or disk error). System halted', 0
+.load_ohci:
+    mov esi, file_ohci_sys
+    mov edi, OHCI_DRIVER_ADDR
+    mov edx, DIR_DRIVERS_ADDR
+    mov ah, 0x0a
+    mov bl, 0xff
+    int 0x33
+
+    mov eax, [ohci_base]
+    call OHCI_DRIVER_ADDR
+    mov [usb_keybuffer], edx
+
+    mov [usb_keyboard_tdptr], edi
+    mov [usb_keyboard_edptr], esi
+
+    ;get USB devices
+    mov esi, USB_DEVICE_LIST
+.loop_usb:
+    lodsb
+    je .keyboard
+    cmp al, 3
+    je .usb_stick
+
+    cmp al, 0xee
+    je .skip_ohci
+    jmp .loop_usb
+
+.keyboard:
+    mov byte [usb_keyboard_used], 1
+    jmp .skip_ohci
+.usb_stick:
+    ;put USB stick into drive list...
+.skip_ohci:
+    call load_configs
+    jc .config_err
+
+    mov ebx, 0x00FFFFFF
+    mov esi, gdt_loaded_msg
+    call print_string
+    call print_newline
+
+    mov esi, idt_loaded_msg
+    call print_string
+    call print_newline
+
+    mov esi, cur_bmbase_str
+    mov ebx, 0x00ffffff
+    call print_string
+
+    mov edx, [bm_base]
+    call print_hex8
+
+    mov al, 0x20
+    call print_char
+
+    mov edx, [abar]
+    call print_hex8
+
+    mov al, 0x20
+    call print_char
+
+    mov edx, [ohci_base]
+    call print_hex8
+    call print_newline
+
+    ;call ahci_init
+    mov esi, ahci_initialized
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+
+    mov esi, fs_loading_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+
     mov ebx, 0x00ffffff
     mov esi, start_msg
     mov ah, 0x01
     int 0x30
     call print_newline
     inc word [task_count]
+    jmp .init_first_task
 
+.config_err:
+    mov esi, configs_load_err
+    mov ebx, COLOR_RED
+    call print_string
+    call print_newline
+.init_first_task:
     mov edi, tasks_esp
     add edi, TASK_SIZE      ;task 1 - shell
     mov esi, shell_task_str
@@ -413,9 +545,9 @@ load_fat:
     mov cx, [reserved_sectors]
     add ecx, [hidden_sectors]
     xor ebx, ebx
-    cmp word [fat_size], 32
+    cmp word [fat_size], 25
     jb .continue
-    mov ebx, 32
+    mov ebx, 25
     jmp .load
 .continue:
     mov bx, [fat_size]
@@ -487,19 +619,37 @@ scan_disk_pci:
     mov ebx, eax
     mov eax, ecx
 
+    ;class
     mov edx, ebx
     shr edx, 24
-    cmp dl, 0x01
-    jne .skip
 
+    cmp dl, 0x01
+    je .ahci_ide
+
+
+    cmp dl, 0x0c
+    je .serial_bus_controller
+    jmp .skip
+    ;sub class
+.ahci_ide:
     mov edx, ebx
     shr edx, 16
     cmp dl, 0x6     ;AHCI
     je .found_ahci
     cmp dl, 0x01
-    je .found       ;IDE
+    je .found_ide       ;IDE
     jmp .skip
-.found:
+.serial_bus_controller:
+    mov edx, ebx
+    shr edx, 16
+    cmp dl, 0x03
+    je .usb
+
+    jmp .skip
+.found_ide:
+    cmp byte [ide_found], 1
+    je .skip
+
     mov eax, 0x80000000
     movzx ebx, byte [pci_bus]
     shl ebx, 16
@@ -516,7 +666,9 @@ scan_disk_pci:
     mov ecx, eax
     or eax, 0x04
     call pci_read
-    or eax, 0x0006
+    or eax, 0x0007
+    and eax, ~(1 << 10) ;rm Bit 10 (interrupt disable)
+
     mov ebx, eax
     mov eax, ecx
     or eax, 0x04
@@ -525,12 +677,16 @@ scan_disk_pci:
     call read_bar4
 
     call ide_init
+    mov byte [ide_found], 1       ;block initialization of other IDE controllers
     jmp .skip
 .found_ahci:
     mov edx, ebx
     shr edx, 8
     cmp dl, 0x01        ;Programming Interface
     jne .skip
+
+    cmp byte [ahci_found], 1
+    je .skip
 
     mov eax, 0x80000000
     movzx ebx, byte [pci_bus]
@@ -548,7 +704,7 @@ scan_disk_pci:
     mov ecx, eax
     or eax, 0x04
     call pci_read
-    or eax, 0x0006  ;IO + bus master
+    or eax, 0x0005  ;IO + bus master
     and eax, ~(1 << 10)
     mov ebx, eax
     mov eax, ecx
@@ -562,14 +718,83 @@ scan_disk_pci:
     call pci_read
 
     and eax, 0xff
-    add al, 32
+    add al, 0x20
     mov [ahci_irq], al
 
     movzx ebx, al
     mov eax, ahci_interrupt_handler
     call set_idt_entry
 
+    mov byte [ahci_found], 1
     call ahci_init
+    jmp .next_device
+.usb:
+    mov edx, ebx
+    shr edx, 8
+    cmp dl, 0
+    je .uhci
+    cmp dl, 0x10
+    je .ohci
+    cmp dl, 0x20
+    je .ehci
+    cmp dl, 0x30
+    je .xhci
+    jmp .next_device
+
+.uhci:
+    jmp .next_device
+.ohci:
+    cmp byte [ohci_found], 1
+    je .skip
+
+    mov eax, 0x80000000
+    movzx ebx, byte [pci_bus]
+    shl ebx, 16
+    or eax, ebx
+
+    movzx ebx, byte [pci_device]
+    shl ebx, 11
+    or eax, ebx
+
+    movzx ebx, byte [pci_function]
+    shl ebx, 8
+    or eax, ebx
+
+    mov ecx, eax
+
+    call read_bar0
+    and eax, 0xfffffff0
+    mov [ohci_base], eax
+
+    mov eax, ecx
+    add eax, 4
+
+    call pci_read
+    mov ebx, eax
+    and bx, 0xfdff  ;rm Bit 10 (Interrupt Disable)
+
+    mov eax, ecx
+    add eax, 4
+    call pci_write
+
+    ;get IRQ
+    mov eax, ecx
+    add eax, 0x3c
+    call pci_read
+
+    add al, 0x20
+    movzx ebx, al
+    mov eax, ohci_interrupt_handler
+    call set_idt_entry
+
+    ;call get_ohci_devices
+    mov byte [ohci_found], 1
+    jmp .next_device
+.ehci:
+    jmp .next_device
+.xhci:
+    jmp .next_device
+
 .next_device:
     inc byte [pci_device]
     jmp .device_loop
@@ -581,6 +806,7 @@ scan_disk_pci:
     jmp .bus_loop
 .done:
     mov byte [edi], '$'
+    mov byte [ide_running], 0
     ret
 pci_read:
     ;EAX = PCI adress
@@ -658,7 +884,79 @@ read_bar5:
     mov [eax+4], ebx
 
     ret
+read_bar0:
+    ;outputs value in EAX
+    add eax, 0x10
+    call pci_read
+    ret
 search_boot_device:
+    mov byte [boot_drive], 2
+    ret
+
+init_system:
+    mov ecx, 0x1000000
+.loop:
+    dec ecx
+    jnz .loop
+
+    mov ah, 0x05
+    int 0x35
+
+load_configs:
+    ;load configs directory
+    mov esi, dir_configs_str
+    mov edi, CONFIG_DIR_BUFFER
+    mov ah, 0x02
+    int 0x33
+    jc .error
+
+    ;load BGCOLOR.CFG from configs directory
+    mov edx, CONFIG_DIR_BUFFER          ;from where to load
+    mov edi, CONFIGS_FILE_BUFFER        ;where to load
+    mov esi, file_bgcolor_cfg           ;what to load
+    mov bl, 0xff
+    mov ah, 0x0a
+    int 0x33
+    jc .error
+
+    mov esi, CONFIGS_FILE_BUFFER
+.loop:
+    lodsb
+    cmp al, '#'
+    je .skip_comment
+
+    sub esi, 1
+.convert:
+    call string_to_hex6
+    mov [bgcolor], esi
+
+    ;set background color
+    mov dword [cur_x], 0
+    mov dword [cur_y], 0
+
+    mov edi, [frame_buffer]
+    mov ecx, [real_width]
+    imul ecx, [real_height]
+    movzx eax, byte [bpp]
+.loop1:
+    add edi, eax
+    mov dword [edi], esi
+    loop .loop1
+
+.done:
+    ret
+.skip_comment:
+    lodsb
+    cmp al, 0x0a
+    jne .skip_comment
+    cmp al, 0
+    je .done
+    jmp .convert
+.error:
+    mov esi, configs_load_err
+    mov ebx, COLOR_RED
+    call print_string
+    call print_newline
     ret
 %include "data/data.asm"
 %include "data/font.asm"
@@ -669,8 +967,11 @@ search_boot_device:
 %include "shell/shell.asm"
 %include "drivers/fs16.asm"
 %include "drivers/pci.asm"
+;%include "drivers/ohci.asm"
+%include "syscalls/string.asm"
+%include "syscalls/system.asm"
 font8x16:
-    incbin "/home/technodon/Downloads/xmode/data/DEFAULT.FNT"
+    incbin "data/DEFAULT.FNT"
 disk_error_msg: db 'Disk Read Error', 0
 
 ;memory map
@@ -678,4 +979,4 @@ disk_error_msg: db 'Disk Read Error', 0
 ;0x4000 - 0x7c00:      FAT
 ;0x7c00 - 0x8000:      boot sector
 ;0x8000 - 0x50000:     kernel
-;0x95000 - 0xffffffff: programs
+;0x200000: programs
