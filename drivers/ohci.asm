@@ -48,6 +48,9 @@ get_ohci_devices:
     jnz .loop
 .done:
     popa
+    mov edx, usb_keyboard_buffer        ;return pointer of keyboard buffer
+    mov esi, usb_keyboard_ed
+    mov edi, usb_keyboard_td
     clc
     ret
 
