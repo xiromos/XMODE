@@ -1,7 +1,8 @@
 ## README file
 
-XMODE is a 32Bit operating system which is entirely written in Assembly.<br>
-Currently it has no bootloader because it is made for the Xiromos OS.<br>
+XMODE is a 32Bit operating system which is entirely written in x86 Assembly.<br>
+It comes with an UEFI bootloader, but if you use BIOS (like SeaBIOS in QEMU) you <br>
+have to install it on Xiromos. <br>
 Here you can read how to install XMODE in Xiromos: https://github.com/xiromos/Xiromos
 
 
@@ -10,7 +11,9 @@ Here you can read how to install XMODE in Xiromos: https://github.com/xiromos/Xi
 ### Standard
 **help**: show available commands<br>
 **clear**: clear screen<br>
-**mmap**: shows memory map
+**mmap**: shows memory map<br>
+**pci**: shows all PCI devices
+**usb**: shows all USB devices (OHCI only, UHCI planned)
 
 ### Filesystem
 **ls**: list content of current directory<br>
@@ -18,29 +21,37 @@ Here you can read how to install XMODE in Xiromos: https://github.com/xiromos/Xi
 **write**: create file<br>
 **rename**: rename a file<br>
 **delete**: delete a file<br>
+**cdisk**: switch disk
 
 ## Features
 
 - FAT16
 - VESA Video Mode: 1024x768px
-- windows
+- windows / window manager
 - own assembler
 - preemptive multitasking
-- DMA driver for hard disks
+- task states like 'running', 'waiting for disk', 'in queue'
+- PCI Busmastering (U)DMA driver for hard disks
 - multi-disk support
+- OHCI Keyboard driver
+- AHCI driver (in work)
+
+## Special Features
+- some drivers are loaded as external modules from the 'drivers' directory
+- scheduler which skips tasks if they are waiting, for example for disk
 
 ## How to use
 
-To execute a program write it name in capital letters into the terminal. If you want to do a file operation (e.g. read FILE.TXT)<br>
-the filename has to be capital. Because there is no mouse support you can switch between programs via the F1 key. It then opens a <br>
-window in which you can chose a current active task. To do that just type the number of the task or press ESC. To get a list of <br>
-available commands type "help". Also, if you dont boot with UEFI you will probably use Xiromos. To use XMODE just type "XMODE".
+Switch Tasks via F1 Key. It doesnt matter if you type command with or without capital <br>
+letters because shell isnt case sensitive.
 
 ## TODO
 
-- Window Manager
+- real Window Manager
 - Multi-Core support
-- make AHCI driver
+- APIC support
+- finish AHCI driver
 - Internet
 - improve assembler
 - support of higher resolutions (1080p)
+- UCHI and EHCI drivers
