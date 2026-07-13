@@ -1,9 +1,10 @@
 ### Supported Hardware
 
 - PS/2 Keyboard (Scancode Set 1)
-- USB 1.x Keyboard (and mainboard with OHCI controller)
-- min. Display Resolution of 1024x768px (other resolutions come soon)
-- min. CPU: i386
-- IDE Hard Disks (soon AHCI support)
-
-- Programmable Interrupt Controller (PIC) needed (not APIC)
+- USB 1.x Keyboard (OHCI only)
+- recommended display resolution of 1024x768
+- CPU: i386 or above
+- IDE Hard Disks
+- max 4 IDE Hard Disks and 32 AHCI devices (1 controller each)
+- Soundblaster 16
+- Intel 8259A
