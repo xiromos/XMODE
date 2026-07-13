@@ -1,5 +1,6 @@
 ;=====================================================================
 ;INT 0x33
+;AH = 0x00: get file information                            input: EDI = pointer to directory, ESI = filename               output: ECX = size, EAX = flags, EBX = first cluster
 ;AH = 0x01: get file list of the current directory          input: EDI = buffer for file list                               output: filled buffer with file names
 ;AH = 0x02: read a file into memory                         input: EDI = buffer in memory, ESI = filename                   output: no CF if successful, length of file in ECX
 ;AH = 0x03: write a file to disk                            input: ESI = filename, ECX = filesize (bytes), EDI = buffer     output: CF if error
@@ -7,9 +8,12 @@
 ;AH = 0x05: delete a file                                   input: ESI = filename                                           output: CF if error
 ;AH = 0x06: copy file from dir to subdir                    input: ESI = filename, EDI = directory                          output: CF if error
 ;AH = 0x07: copy file to another disk
-;AH = 0x08: load program into memory                        input: ESI = program name, EDI = address in memory               output: CF if error
+;AH = 0x08: load program into memory                        input: ESI = program name, EDI = address in memory              output: CF if error
+;AH = 0x09: format a drive / partition with FAT16           input: AL  = drive number, BL = partition number (0-3)          output: CF if error
 
-;AH = 0x0A: load file from not-root directory               input: ESI = file name, EDI = address where to load, EDX = address from where to load, BL = drive number       output: CF if error 
+;AH = 0x0A: load file from not-root directory               input: ESI = file name, EDI = address where to load, EDX = address from where to load (directory), BL = drive number       output: CF if error
+;AH = 0x0B: load file from not-root directory               input: ESI = file name, EDI = where to save (directory cluster), EDX = address from where to load, ECX = length, BL = drive number       output: CF if error
+;AH = 0x20: change drive - load MBR of new drive and change parameters      input: ESI = pointer to argument with drive number and partition (eg. 1.1 / 2.3)
 ; Drive Numbers:
 ;     0 = First Floppy
 ;     1 = Second Floppy
@@ -107,6 +111,8 @@ fs16_write_fat:
 
 
 fs16_handler:
+    cmp ah, 0
+    je fs16_get_file_information
     cmp ah, 0x01
     je fs16_get_file_list
     cmp ah, 0x02
@@ -121,6 +127,8 @@ fs16_handler:
     je fs16_copy_file
     cmp ah, 0x08
     je fs16_load_program
+    cmp ah, 0x09
+    je fs16_format_drive
     cmp ah, 0x0a
     je fs16_load_file
     cmp ah, 0x20
@@ -579,6 +587,7 @@ fs16_change_drive:
     pusha
     mov edx, [esi]  ;get drive number
     mov [.drive_number], dl
+
     mov dh, 0x0b    ;No extended LBA
     mov eax, 1      ;read 1 sector
     xor ecx, ecx    ;LBA 0
@@ -586,6 +595,10 @@ fs16_change_drive:
     call read_drive
     jc .error
 
+    cmp byte [esi+1], '.'
+    je .switch_partition
+
+.get_fs:
     mov ah, 0x01
     mov esi, .fat16_str
     mov edi, 0x7c00+54
@@ -685,6 +698,7 @@ fs16_change_drive:
 .error:
     ;AH = 0x00: Disk Error
     ;AH = 0x01: Not FAT16 formatted
+    ;AH = 0x02: not an active partition
     mov [.error_num], ah
     popa
     or dword [esp+8], 1
@@ -694,6 +708,37 @@ fs16_change_drive:
 .fat16_str: db "FAT16   "
 .drive_number: db 0
 .error_num: db 0
+
+.switch_partition:
+    mov al, [esi+2]
+    sub al, 0x30
+
+    cmp al, 4
+    ja .error
+
+    mov edi, 0x7c00+446
+    xor ah, ah
+    imul ax, 16
+    movzx ebx, ax
+    add edi, ebx
+
+    mov ah, 0x02
+    cmp byte [edi], 0x80
+    jne .error
+
+    mov eax, [edi+8]
+    mov [hidden_sectors], eax
+
+    mov ecx, eax
+    mov dh, 0x0b
+    mov dl, [.drive_number]
+    mov eax, 1
+    mov edi, 0x7c00
+    call read_drive
+    xor ah, ah
+    jc .error
+
+    jmp .get_fs
 
 fs16_load_file:
     pusha
@@ -735,6 +780,7 @@ fs16_load_file:
     call cluster_to_sec
 
     movzx ecx, ax
+    add ecx, dword [hidden_sectors]
     movzx eax, byte [sec_per_cluster]
     mov dl, [.drive_number]
     mov dh, 0x0b
@@ -770,3 +816,74 @@ fs16_load_file:
     iret
 
 .drive_number: db 0
+
+
+
+
+
+;############################################################
+;################### FORMAT DRIVE FUNCTION ##################
+;############################################################
+
+
+fs16_format_drive:
+    pusha
+    ;allocate heap
+
+    ;load MBR to set partition and BPB
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+
+
+
+
+;############################################################
+;#################### WRITE FILE TO DISK ####################
+;############################################################
+
+fs16_write_file2:
+    pusha
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+.error:
+    popa
+    or dword [esp+8], 1
+    iret
+
+
+
+
+fs16_get_file_information:
+    pusha
+.loop:
+    mov ecx, 11
+    mov al, [edi]
+    cmp al, 0
+    je .error
+
+    push esi
+    push edi
+    repe cmpsb
+    pop edi
+    pop esi
+    je .found
+
+    add edi, 32
+
+    jmp .loop
+.error:
+    popa
+    or dword [esp+8], 1
+    iret
+.found:
+    mov [.tmp], edi
+    popa
+    mov edi, [.tmp]
+    mov ecx, [edi+0x1c]
+    movzx eax, byte [edi+0x0b]
+    movzx ebx, word [edi+0x1a]
+    and dword [esp+8], 0xfffffffe
+    iret
+.tmp: dd 0
