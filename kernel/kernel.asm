@@ -33,9 +33,12 @@ start:
     mov [bpp], al               ;should be 3
 
     ;get memory map
+    mov ax, 0x7000
+    mov es, ax
+    xor di, di
     xor eax, eax
     xor ebx, ebx
-    mov di, mmap_buffer
+    xor si, si
 .next:
     mov eax, 0xe820
     mov edx, 0x534D4150
@@ -47,10 +50,13 @@ start:
     jne .done
     mov [mmap_entries], ecx
     add di, cx
+    inc si
     cmp ebx, 0
     jne .next
 .done:
-    
+    mov [main.memmap_entrysize], cx
+    mov [main.memmap_entries], si
+
     mov ax, tss
     shr ax, 16
     mov byte [gdt_start.descriptor+4], al
@@ -114,6 +120,13 @@ uefi:
     mov [rel frame_buffer], edx
     mov [rel bpp], cl
     mov [rel real_width], ebx
+    mov [rel real_height], edi
+
+    mov eax, [rsi+8]
+    mov word [rel main.memmap_entries], ax
+    mov ebx, [rsi+12]
+    mov word [rel main.memmap_entrysize], bx
+    mov word [rel mmap_entries], bx
 
     lea eax, [rel tss]
     shr eax, 16
@@ -134,6 +147,7 @@ uefi:
     or rax, 1
     mov cr0, rax
 bits 32
+[cpu 386]
     jmp far code_off:uefi2
 uefi2:
     mov eax, [real_width]
@@ -166,6 +180,64 @@ main:
     ; out 0x21, al
     xor al, al
     out 0xa1, al
+
+    ;check amount of available memory
+    mov edi, mmap_buffer
+    movzx edx, word [.memmap_entrysize]
+    movzx ecx, word [.memmap_entries]
+
+    push ecx
+    push edx
+    push edi
+
+    imul ecx, edx
+    mov esi, 0x70000
+    rep movsb
+
+    pop edi
+    pop edx
+    pop ecx
+
+    cmp ecx, 0
+    je .continue1
+.loop_mem:
+    mov eax, [edi+16]
+    cmp eax, 1
+    jne .skip_entry
+
+    cmp dword [edi+4], 0
+    jne .overflow
+    cmp dword [edi+12], 0
+    jne .overflow
+
+    mov eax, [edi+8]
+    add dword [.usable_mem], eax
+    mov ebx, [edi]
+    add ebx, eax
+    mov [.max_addr], ebx
+.skip_entry:
+    add edi, edx
+    dec ecx
+    jnz .loop_mem
+    jmp .continue1
+.overflow:
+    mov dword [.usable_mem], 0xffffffff ;over 4GB
+.continue1:
+    call set_pages
+
+    mov eax, [real_width]
+    movzx ecx, byte [bpp]
+    imul eax, ecx
+    mov ebx, [real_height]
+    imul eax, ebx
+
+    mov ebx, eax
+    inc ebx
+    mov eax, [frame_buffer]
+    xor ecx, ecx
+    or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS | PAGE_USER
+    call map_region
+
     sti
     mov eax, [frame_buffer]
     mov [cur], eax
@@ -177,6 +249,8 @@ main:
     add edi, eax
     mov dword [edi], 0x0014c4be
     loop .loop
+
+    call init_heap
 
     ;0xFFFFFFFF = white
     ;0x00FF0000 = red
@@ -190,12 +264,7 @@ main:
     mov esi, idt_loaded_msg
     call print_string
     call print_newline
-    ; disk read
-    ; mov ah, 0x01
-    ; mov edi, 0x15000
-    ; mov ecx, 100
-    ; mov ebx, 255
-    ; int 0x32
+
     mov esi, cur_bmbase_str
     mov ebx, 0x00ffffff
     call print_string
@@ -206,22 +275,9 @@ main:
 
     mov ebx, init_system
     mov esi, program_init_sys
-    mov ah, 0x03
-    int 0x35
-
-    ;cli
-    ;hlt
-;     mov al, '+'
-;     call print_char
-; .leap1:
-;     hlt
-;     jmp .leap1
-
-; .carry:
-;     mov al, 'C'
-;     call print_char
-;     cli
-;     hlt
+    mov ah, 0x13
+    ;int 0x35
+    
     mov al, 0x20
     call print_char
 
@@ -250,10 +306,6 @@ main:
     mov ah, 0x13
     ;int 0x32
 
-    xor al, al
-    ;call read_ahci
-    ;cli
-    ;hlt
     call get_bpb_data
 
     mov ax, [root_entries]
@@ -296,67 +348,8 @@ main:
     div ebx
     mov [subdir_entries], ax
 
-    ;init system and drivers
-;     cmp byte [ide_found], 1
-;     jne .skip_ide
-;     call ide_init
+    call load_drivers
 
-; .skip_ide:
-;     cmp byte [ahci_found], 1
-;     jne .skip_ahci
-;     call ahci_init
-
-; .skip_ahci:
-    cmp byte [ohci_found], 1
-    jne .skip_ohci
-
-    ;load drivers directory
-    mov esi, dir_drivers_str
-    mov edi, DIR_DRIVERS_ADDR
-    mov ah, 0x02
-    int 0x33
-    jnc .load_ohci
-
-    call print_newline
-    mov esi, .error_load_drivers
-    mov ebx, COLOR_RED
-    call print_string
-    cli
-    hlt
-.error_load_drivers: db 'Error loading Drivers directory (either not found or disk error). System halted', 0
-.load_ohci:
-    mov esi, file_ohci_sys
-    mov edi, OHCI_DRIVER_ADDR
-    mov edx, DIR_DRIVERS_ADDR
-    mov ah, 0x0a
-    mov bl, 0xff
-    int 0x33
-
-    mov eax, [ohci_base]
-    call OHCI_DRIVER_ADDR
-    mov [usb_keybuffer], edx
-
-    mov [usb_keyboard_tdptr], edi
-    mov [usb_keyboard_edptr], esi
-
-    ;get USB devices
-    mov esi, USB_DEVICE_LIST
-.loop_usb:
-    lodsb
-    je .keyboard
-    cmp al, 3
-    je .usb_stick
-
-    cmp al, 0xee
-    je .skip_ohci
-    jmp .loop_usb
-
-.keyboard:
-    mov byte [usb_keyboard_used], 1
-    jmp .skip_ohci
-.usb_stick:
-    ;put USB stick into drive list...
-.skip_ohci:
     call load_configs
     jc .config_err
 
@@ -456,9 +449,13 @@ main:
     push shell
     sti
     iret
-halt:
+.halt:
     hlt
-    jmp halt
+    jmp .halt
+.memmap_entrysize: dw 0
+.memmap_entries: dw 0
+.usable_mem: dd 0
+.max_addr: dd 0
 
 
 remap_pic:
@@ -482,8 +479,20 @@ remap_pic:
     out 21h,al              ; First PIC
     out 0A1h,al             ; Second PIC
 
+    ; change PIT frequenzy
+    push edx
+    mov dx, 0x43
+    mov al, 0x36
+    out dx, al
+
+    mov ax, PIT_DIVISOR
+    mov dx, 0x40
+    out dx, al
+    shr ax, 8
+    out dx, al
+    pop edx
     pop eax
-    
+
     ret
 
 flush_tss:
@@ -626,9 +635,12 @@ scan_disk_pci:
     cmp dl, 0x01
     je .ahci_ide
 
+    cmp dl, 0x04
+    je .multimedia
 
     cmp dl, 0x0c
     je .serial_bus_controller
+
     jmp .skip
     ;sub class
 .ahci_ide:
@@ -645,6 +657,12 @@ scan_disk_pci:
     cmp dl, 0x03
     je .usb
 
+    jmp .skip
+.multimedia:
+    mov edx, ebx
+    shr edx, 16
+    cmp dl, 0x03        ;audio device
+    je .found_audiodev
     jmp .skip
 .found_ide:
     cmp byte [ide_found], 1
@@ -704,7 +722,7 @@ scan_disk_pci:
     mov ecx, eax
     or eax, 0x04
     call pci_read
-    or eax, 0x0005  ;IO + bus master
+    or eax, 0x07
     and eax, ~(1 << 10)
     mov ebx, eax
     mov eax, ecx
@@ -726,7 +744,7 @@ scan_disk_pci:
     call set_idt_entry
 
     mov byte [ahci_found], 1
-    call ahci_init
+    ;call ahci_init
     jmp .next_device
 .usb:
     mov edx, ebx
@@ -765,6 +783,15 @@ scan_disk_pci:
     call read_bar0
     and eax, 0xfffffff0
     mov [ohci_base], eax
+    
+    push ebx
+    push ecx
+    mov ebx, 0x2000
+    xor ecx, ecx
+    or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS
+    call map_region
+    pop ecx
+    pop ebx
 
     mov eax, ecx
     add eax, 4
@@ -793,6 +820,33 @@ scan_disk_pci:
 .ehci:
     jmp .next_device
 .xhci:
+    jmp .next_device
+.found_audiodev:
+    mov byte [intel_hd_audio], 1
+
+    mov eax, 0x80000000
+    movzx ebx, byte [pci_bus]
+    shl ebx, 16
+    or eax, ebx
+
+    movzx ebx, byte [pci_device]
+    shl ebx, 11
+    or eax, ebx
+
+    movzx ebx, byte [pci_function]
+    shl ebx, 8
+    or eax, ebx
+
+    mov ecx, eax
+
+    call read_bar0
+    mov [intel_audiodev_base], eax
+
+    xor ecx, ecx
+    or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS
+    mov ebx, 0x1000
+    call map_region
+
     jmp .next_device
 
 .next_device:
@@ -877,6 +931,15 @@ read_bar5:
     and eax, 0xfffffff0     ;remove flags
     mov [abar], eax         ;AHCI Base Address Register
 
+    push ebx
+    push ecx
+    mov ebx, 0x2000
+    xor ecx, ecx
+    or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS
+    call map_region
+    pop ecx
+    pop ebx
+
     ;activate global AHCI interrupts
     mov eax, [abar]
     mov ebx, [eax+4]
@@ -891,6 +954,7 @@ read_bar0:
     ret
 search_boot_device:
     mov byte [boot_drive], 2
+    mov byte [drive_number], 2
     ret
 
 init_system:
@@ -919,11 +983,19 @@ load_configs:
     int 0x33
     jc .error
 
+    mov ecx, 0xfffff
+.delay:
+    loop .delay
+
     mov esi, CONFIGS_FILE_BUFFER
 .loop:
     lodsb
     cmp al, '#'
     je .skip_comment
+    cmp al, 0x20
+    je .loop
+    cmp al, 0
+    je .error
 
     sub esi, 1
 .convert:
@@ -949,15 +1021,371 @@ load_configs:
     lodsb
     cmp al, 0x0a
     jne .skip_comment
-    cmp al, 0
-    je .done
     jmp .convert
 .error:
+    mov [bgcolor], dword 0x0014C4BE
     mov esi, configs_load_err
     mov ebx, COLOR_RED
     call print_string
     call print_newline
     ret
+
+
+set_pages:
+    ;activate identity mapping
+    PAGE_PRESENT    equ (1 << 0)
+    PAGE_RW         equ (1 << 1)
+    PAGE_USER       equ 4
+    PAGE_CACHE_DIS  equ (1 << 4)
+    PAGES_BASE      equ 0x300000
+    PAGE_DIR        equ 0x700000
+
+    cli
+    ;clear PAGE_DIR
+    mov edi, PAGE_DIR
+    xor eax, eax
+    mov ecx, 1024
+    rep stosd
+
+    mov edi, PAGES_BASE
+    mov ecx, 4          ;map 20MB (5 pages)
+    mov esi, PAGE_DIR
+    xor eax, eax
+.loop:
+    push ecx
+    xor ebx, ebx
+    mov ecx, 1024
+    push edi
+    call .fill_page
+    pop edi
+    pop ecx
+
+    mov edx, edi
+    or edx, PAGE_PRESENT | PAGE_RW | PAGE_USER
+    mov [esi], edx
+
+    add esi, 4
+    add edi, 0x1000     ;4KB
+    loop .loop
+
+    ;remove PAE Bit, set by UEFI
+    mov eax, cr4
+    and eax, ~(1 << 5)
+    mov cr4, eax
+
+    ;load page directory
+    mov eax, PAGE_DIR
+    mov cr3, eax
+
+    ;enable paging
+    mov eax, cr0
+    or eax, 0x80000000
+    mov cr0, eax
+
+    jmp .done   ;flush
+.fill_page:
+    mov ebx, eax
+    or ebx, PAGE_PRESENT | PAGE_RW | PAGE_USER
+    mov [edi], ebx
+
+    add eax, 4096
+    add edi, 4
+
+    dec ecx
+    jnz .fill_page
+    ret
+.done:
+    sti
+    ret
+
+map_region:
+    ;EAX = address
+    ;EBX = size
+    ;ECX = flags
+    pusha
+
+    cmp ebx, 0
+    je .error
+
+    push eax
+    xor edx, edx
+    mov eax, ebx
+    add eax, 4095
+    mov ebx, 4096
+    div ebx
+    
+    mov ebx, eax    ;number of pages
+    pop eax
+
+.loop:
+    mov edx, eax
+    shr edx, 22     ;page directory index
+    mov edi, edx
+
+    shl edi, 12     ;*0x1000
+    add edi, PAGES_BASE     ;address in page table
+
+    push ecx
+
+    mov ecx, eax
+    shr ecx, 12
+    and ecx, 0x3ff  ;page table index
+
+    lea edi, [edi+ecx*4]
+
+    pop ecx
+    push edx
+    call .map_page
+    pop edx
+
+    lea edi, [PAGE_DIR+edx*4]
+    test dword [edi], PAGE_PRESENT
+    jnz .skip
+
+    mov esi, edx
+    shl esi, 12
+    add esi, PAGES_BASE
+
+    or esi, ecx
+    mov [edi], esi
+.skip:
+    dec ebx
+    jnz .loop
+
+    popa
+    clc
+    ret
+.error:
+    popa
+    stc
+    ret
+.map_page:
+    mov edx, eax
+    and edx, 0xfffff000
+    or edx, ecx
+    mov [edi], edx
+
+    add eax, 0x1000
+    add edi, 4
+    ret
+
+
+load_drivers:
+    ;load drivers directory
+    mov esi, dir_drivers_str
+    mov edi, DIR_DRIVERS_ADDR
+    mov ah, 0x02
+    int 0x33
+    jc .drivers_dir_err
+
+    cmp byte [ohci_found], 1
+    jne .skip_ohci
+
+    mov esi, file_ohci_sys
+    mov edi, OHCI_DRIVER_ADDR
+    mov edx, DIR_DRIVERS_ADDR
+    mov ah, 0x0a
+    mov bl, 0xff
+    int 0x33
+
+    mov eax, [ohci_base]
+    call OHCI_DRIVER_ADDR
+    cmp ah, 0
+    je .skip_ohci
+    mov [usb_devices], ah
+
+    mov [usb_keybuffer], edx
+
+    mov [usb_keyboard_tdptr], edi
+    mov [usb_keyboard_edptr], esi
+
+    ;get USB devices
+    mov esi, USB_DEVICE_LIST
+    movzx edx, ah
+.loop_usb:
+    lodsb
+    cmp al, 1
+    je .keyboard
+    cmp al, 3
+    je .usb_stick
+
+    cmp al, 0xee
+    je .skip_ohci
+    add esi, USB_LIST_ENTRY-1
+
+    dec dx
+    jnz .loop_usb
+
+.keyboard:
+    mov byte [usb_keyboard_used], 1
+    add esi, USB_LIST_ENTRY-1
+    dec dx
+    jnz .loop_usb
+.usb_stick:
+    movzx edi, byte [avail_disks]
+    imul edi, DRIVE_LIST_ENTRY
+    add edi, DRIVE_LIST_ADDR
+
+    ;copy vendor name
+    push esi
+    push edi
+    mov ecx, 8
+    rep movsb
+    pop edi
+    pop esi
+
+    mov byte [edi+8], 0x10      ;OHCI
+    mov byte [edi+9], 0xbe      ;USB
+
+    mov eax, [ohci_base]
+    mov [edi+12], eax
+
+    mov ax, [esi+32]
+    mov [edi+10], ax
+
+    mov eax, [esi+24]           ;max LBA
+    mov [edi+32], eax
+    mov eax, [esi+28]           ;block size
+    mov [edi+36], eax
+
+    push esi
+    add edi, 16
+    add esi, 8
+    mov ecx, 16
+    rep movsb
+    pop esi
+
+    inc byte [avail_disks]
+    add esi, USB_LIST_ENTRY-1
+    dec dx
+    jnz .loop_usb
+.skip_ohci:
+    ; #### Test if SB16 card is available ####
+    call .check_sb16_card
+    cmp al, 0xaa
+    jne .skip_sb16
+
+    mov esi, file_sb16_sys
+    call load_driver_file
+    jc .skip_sb16
+
+    ; driver expects in AL IRQ number to use
+    xor al, al
+    or al, (1 << 1)     ;IRQ 7 (QEMU has a bug which puts the IRQ handler of SB16 always to IRQ5, so this configuration is ignored on QEMU, but should work on real hardware and other emulators)
+
+    call edi
+
+    push edx
+    cli
+    mov eax, [edx+8]
+    mov ebx, 0x25
+    call set_idt_entry
+    sti
+    pop edx
+
+    mov [wavfile_functions], edx
+
+    ; mov ah, 0x0a
+    ; xor edx, edx
+    ; mov edi, 0x100000
+    ; mov esi, .test_file
+    ; mov bl, [drive_number]
+    ; int 0x33
+
+    ; call dword [play_wavfile]
+.skip_sb16:
+    cmp byte [intel_hd_audio], 1
+    jne .skip_intel_audiodev
+
+    mov esi, file_intl_aud_sys
+    call load_driver_file
+
+    mov eax, [intel_audiodev_base]
+    call edi
+.skip_intel_audiodev:
+    ret
+
+; Error loading drivers directory
+.drivers_dir_err:
+    call print_newline
+    mov esi, .error_load_drivers
+    mov ebx, COLOR_RED
+    call print_string
+    call print_newline
+    ret
+.error_load_drivers: db 'Error loading Drivers directory (either not found or disk error), ', 0x0a, 
+                     db 'Keyboard, and other devices might not work. Restart the PC. If this keeps continuing,', 0x0a, 
+                     db 'the directory is missing or the filesystem could be damaged', 0
+.test_file: db 'TEST    WAV'
+
+.check_sb16_card:
+    mov dx, 0x226
+    mov al, 1
+    out dx, al
+
+    ;delay
+    mov dx, 0x80
+    in al, dx
+    in al, dx
+    in al, dx
+    in al, dx
+
+    mov dx, 0x226
+    xor al, al
+    out dx, al
+
+    mov dx, 0x22e
+.sb_rdy:
+    in al, dx
+    test al, (1 << 7)
+    jz .sb_rdy
+
+    mov dx, 0x22a
+    in al, dx
+    ret
+
+load_driver_file:
+    ;Input: ESI = filename
+    ;Output: EDI = startaddress
+    xor ah, ah
+    mov edi, DIR_DRIVERS_ADDR
+    int 0x33
+    jc .error1
+
+    push esi
+
+    mov ah, 0x0a
+    int 0x35
+
+    mov [.heap], esi
+    mov [.size], ecx
+
+    mov edi, esi
+    pop esi
+    mov edx, DIR_DRIVERS_ADDR
+    mov ah, 0x0a
+    mov bl, [drive_number]
+    int 0x33
+    jc .error
+
+    call load_coff_obj
+
+    clc
+    ret
+.error1:
+    stc
+    ret
+.error:
+    mov esi, [.heap]
+    mov ecx, [.size]
+    mov ah, 0x0b
+    int 0x35
+
+    stc
+    ret
+
+.heap: dd 0
+.size: dd 0
 %include "data/data.asm"
 %include "data/font.asm"
 %include "kernel/stdfunc.asm"
@@ -967,13 +1395,16 @@ load_configs:
 %include "shell/shell.asm"
 %include "drivers/fs16.asm"
 %include "drivers/pci.asm"
-;%include "drivers/ohci.asm"
 %include "syscalls/string.asm"
 %include "syscalls/system.asm"
 font8x16:
     incbin "data/DEFAULT.FNT"
 disk_error_msg: db 'Disk Read Error', 0
+usb_devices: db 0
+intel_hd_audio: db 0
+intel_audiodev_base: dd 0           ;MMIO Base Address
 
+PIT_DIVISOR     equ 0xe90b
 ;memory map
 ;0x0000 - 0x4000:      root directory
 ;0x4000 - 0x7c00:      FAT
