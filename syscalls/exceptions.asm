@@ -105,30 +105,43 @@ int0xd:
     iret
 
 int0xe:
+    cli
     pusha
-    mov ebx, [cur_x]
-    mov ecx, [cur_y]
-    push ebx
-    push ecx
+    mov eax, cr2
+    mov ebx, [esp+32]
 
-    mov dword [cur_x], 0
-    mov dword [cur_y], 0
-    mov edx, [color]
+    test ebx, (1 << 0)
+    jnz .access_violation
 
-    push edx
-    mov dword [color], 0x00a60808
-    mov al, 'E'
-    call print_char
-    pop edx
+    ; cmp ebx, 0x05
+    ; je .access_violation
+    ; cmp ebx, 0x07
+    ; je .access_violation
 
-    mov [color], edx
-    pop ecx
-    pop ebx
-    mov [cur_y], ecx
-    mov [cur_x], ebx
+    mov ebx, 0x1000
+    xor ecx, ecx
+    or ecx, PAGE_PRESENT | PAGE_RW | PAGE_USER
+    call map_region
+    jmp .done
+.access_violation:
+    mov ah, 0x04
+    movzx ebx, word [current_task]
+    cmp ebx, 1
+    je .error
+    xor esi, esi
+    int 0x35
+.done:
     popa
+    add esp, 4
     iret
-
+.error:
+    mov ecx, 0x10000
+    mov al, 0xff
+    mov edi, [frame_buffer]
+    rep stosb
+    call rsod
+    cli
+    hlt
 int_no_err:
     pusha
     mov ebx, [cur_x]
@@ -239,7 +252,7 @@ irq0_handler:
     ;update TSS.ESP0
     movzx eax, word [current_task]
     imul eax, tasks_kernel_stack_off
-    add eax, tasks_kernel_stack 
+    add eax, tasks_kernel_stack
 
     mov [tss+4], eax
 .done:
@@ -254,8 +267,8 @@ irq0_handler:
     iretd
 
 .check_attributes:
-    cli
-    hlt
+    mov bx, ax
+    inc bx
     cmp dword [edi+11], 0x0000df00
     je .search_loop     ;skip this task
 
@@ -452,6 +465,8 @@ keyboard_handler2:
 .sleep:
     hlt
     jmp .block
+irq7_handler:
+    iret
 
 irq12_handler:
     iret
@@ -698,7 +713,13 @@ ahci_interrupt_handler:
     mov al, '!'
     call print_char
     mov eax, [abar]
+    test dword [eax+4], (1 << 23)
+    jz .done                ;interrupt did not came from the AHCI controller
+
+    or dword [eax+4], (1 << 23)     ;set Bit 23 to end interrupt
+
     mov ebx, [eax+8]        ;IS
+    ;check which port interrupted... (bit 1 set = port 1, bit 2 set = port 2,...)
     mov [eax+8], ebx
 
     mov esi, ahci_device_list_addr
@@ -712,6 +733,7 @@ ahci_interrupt_handler:
     dec dx
     jnz .loop
 
+.done:
     mov al, 0x20
     out 0xa0, al
     out 0x20, al
@@ -722,15 +744,29 @@ ahci_interrupt_handler:
 ohci_interrupt_handler:
     cli
     pusha
+    ; cmp byte [usb_keyboard_used], 1
+    ; jne .skip_keyboard
+
     mov eax, [ohci_base]
     mov ebx, [eax+12]       ;interrupt status
+    test ebx, (1 << 1)
+    jz .done                ;no WDH
+    or ebx, (1 << 1)
     mov [eax+12], ebx
 
-    test ebx, 2
-    jz .skip_keyboard
+    ; test ebx, 2
+    ; jz .skip_keyboard
 
     mov edx, [eax+0x30]         ;read DoneHead
-    mov dword [eax+0x30], 0     ;clear DoneHead to unblock controller
+    ;mov dword [eax+0x30], 0     ;clear DoneHead to unblock controller
+    mov edx, [hcca+0x84]
+    mov bl, [edx+16]
+    cmp bl, 1
+    je .keyboard
+    cmp bl, 3
+    je .usb_stick
+    jmp .keyboard
+    jmp .done
 
     ; mov ebx, td_empty
     ; mov [usb_keyboard_td+8], ebx
@@ -748,7 +784,7 @@ ohci_interrupt_handler:
     ; mov [usb_keyboard_ed+8], ebx
     ; mov ebx, td_empty
     ; mov [usb_keyboard_ed+4], ebx
-
+.keyboard:
     mov ebx, td_empty
     mov edi, [usb_keyboard_tdptr]
 
@@ -780,6 +816,17 @@ ohci_interrupt_handler:
     add edi, ecx
 
     mov esi, [usb_keybuffer]
+    ; push esi
+    ; push edi
+    ; push ecx
+    ; mov edi, .last_keyreport
+    ; mov ecx, 8
+    ; repe cmpsb
+    ; pop ecx
+    ; pop edi
+    ; pop esi
+    ; je .skip_keyboard       ;skip same keyreport
+
     mov al, [esi]
     add esi, 2
 
@@ -801,9 +848,37 @@ ohci_interrupt_handler:
 
     ; mov al, [usb_keymap+ebx]
     ; call print_char
-.skip_keyboard:
+
+    ; push esi
+    ; push edi
+    ; push ecx
+    ; mov ecx, 8
+    ; mov edi, .last_keyreport
+    ; mov esi, [usb_keybuffer]
+    ; rep movsb
+    ; pop ecx
+    ; pop edi
+    ; pop esi
+    jmp .done
+.usb_stick:
+    mov byte [edx+17], 0
+    mov ebx, [edx+4]    ;CSW Buffer
+    cmp dword [ebx], 'USBS'
+    cmp byte [ebx+12], 0
+    ;jne .error
+    ; cli
+    ; hlt
+.done:
     mov al, 0x20
     out 0xa0, al
     out 0x20, al
     popa
     iret
+
+.last_keyreport: db 8
+
+
+
+
+rsod:
+    ret
