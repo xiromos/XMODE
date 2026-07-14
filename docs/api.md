@@ -179,3 +179,31 @@ Start an already loaded task in background
 - ESI: pointer to taskname (8.3 format)
 
 This is useful if you want to create multiple subtasks in a program. You can pass into EBX the label of a function you want to execute and call this function to create a subtask.
+
+### AH = 0x20
+Functions for playing a WAV file
+
+**Subfunctions**:
+  - BH = 0x01: start playing a loaded WAV file
+      Input: EDI = startaddress of file
+  - BH = 0x02: pause the playing of current playing WAV file
+      Output: Carry flag if there currently is no active WAV file
+  - BH = 0x03: resume to play the paused WAV file
+      Output: Carry flag if there currently is no active WAV file
+  - BH = 0x04: stop completly the play of the current WAV file
+  > When calling function 'BH 0x02' after this function it will set the carry flag because function 0x04 sets status of currently playing a WAV file to 'not active'
+  > You should call this function if you want to play another WAV file instead of the current one
+
+### AH = 0x21
+Network functions
+
+**Subfunctions**:
+  - BH = 0x01: get stats about network traffic
+      Input: EDI = pointer to 128B buffer
+      Output: filled buffer
+      +0: count of successfully sent packets
+      +4: count of how many sent packets lost
+      +8: count of successfully received packets
+      +12: count of errors while receiving packets
+
+  - BH = 0x02:
