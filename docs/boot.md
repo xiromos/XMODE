@@ -25,15 +25,17 @@ Then Xiromos Kernel does following things:
 - if found it sets that video mode
 - then bootloader opens the root directory and searches for XMODE.BIN
 - if found UEFI loads it to 0x8000
-- then it asks for memory map from UEFI and exits UEFI boot services
+- then it asks for memory map from UEFI and copies it to address 0x1ff000
+- bootloader calls ExitBootservices()
 - it passes into registers information about video mode (like address of frame buffer, bytes per pixel,...)
-- jumps to 0x8000+250 to skip BIOS code
-- stores information about frame buffer in variables and switches to protected mode
+- jumps to 0x8000+250 to skip BIOS code in kernel
+- stores information about frame buffer in variables and switches to protected mode, while also disabling paging to load later its own page directory
 
 
 ### After Bootloaders
 
 - kernel loads IDT (interrupt descriptor table) and remaps PIC (Programmable Interrupt Controller) to 0x20
+- it activates paging in CR0 (identity mapping) and initializes heap memory
 - then it scans PCI for IDE / AHCI / OHCI controller
 - when found AHCI or IDE it calls the 'init' function for them and stores information about all drives in a list
 - after that it takes information from the boot sector about filesystem and calculates Root Directory and Data Area start LBAs
@@ -42,4 +44,4 @@ Then Xiromos Kernel does following things:
 - driver gives kernel information about Open Host Controller so it can set up an IRQ handler for it
 - after registering 1. task (SHELL.SYS) in the task list the kernel performs a switch to User Mode (Ring 3) and executes shell code
 
-The operating system is now ready to work and waits for commands. This was the full boot process.
+The operating system is now ready to work and waits for commands.
