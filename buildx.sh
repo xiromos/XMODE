@@ -62,7 +62,7 @@ trap 'printf "${RED}Build failed!${RESET}\n"; exit 1' ERR
 nasm -f bin biosboot.asm -o biosboot.bin
 
 dd if=/dev/zero of=build/disk.img bs=1M count=10
-mkdosfs -F 16 build/disk.img
+mkdosfs -F 16 -n XIROMOS build/disk.img
 #mkdosfs -F 16 build/disk.img -h 2048
 dd if=biosboot.bin of=build/disk.img bs=1 count=450 seek=62 skip=62 conv=notrunc
 
@@ -72,6 +72,7 @@ nasm -f win32 programs/help.asm -o build/help.obj
 nasm -f win32 programs/window.asm -o build/window.obj
 nasm -f bin xasm/xasm.asm -o  build/xasm.bin
 nasm -f win32 drivers/sb16.asm -o build/sb16.obj
+nasm -f win32 drivers/rtl8139.asm -o build/rtl8139.obj
 nasm -f win32 drivers/intel-hd_audio.asm -o build/intl_aud.obj
 nasm -f win32 programs/cpuid.asm -o build/cpuid.obj
 nasm -f win32 programs/wavplay.asm -o build/wavplay.obj
@@ -99,9 +100,10 @@ mmd -i build/disk.img ::/DRIVERS
 mcopy -i build/disk.img build/ohci.bin ::/DRIVERS/OHCI.SYS
 mcopy -i build/disk.img build/sb16.obj ::/DRIVERS/SB16.SYS
 mcopy -i build/disk.img build/intl_aud.obj ::/DRIVERS/INTL_AUD.SYS
+mcopy -i build/disk.img build/rtl8139.obj ::/DRIVERS/RTL8139.SYS
 mcopy -i build/disk.img shell/test.sh ::TEST.SH
-mcopy -i build/disk.img build/test.wav ::TEST.WAV
-mcopy -i build/disk.img build/test2.wav ::TEST2.WAV
+# mcopy -i build/disk.img build/test.wav ::TEST.WAV
+# mcopy -i build/disk.img build/test2.wav ::TEST2.WAV
 
 mdir -i build/disk.img ::
 cp /usr/share/OVMF/x64/OVMF_VARS.4m.fd ~/Downloads/xmode/build
@@ -125,6 +127,9 @@ qemu-system-x86_64 \
     -device intel-hda \
     -device sb16,audiodev=snd0 \
     -audiodev alsa,id=snd0 \
+    -device rtl8139,netdev=n0 \
+    -netdev user,id=n0 \
+    -monitor stdio
 
 # 8 MB: absolute minimum RAM - no programs will work
 # 25MB: recommended
