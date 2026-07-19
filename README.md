@@ -11,7 +11,7 @@ It comes with an 64-Bit UEFI bootloader and a 16-Bit realmode BIOS bootloader.
 **clear**: clear screen<br>
 **mmap**: shows memory map + available memory<br>
 **pci**: shows all PCI devices<br>
-**usb**: shows all USB devices (OHCI only, UHCI planned)
+**usb**: shows all USB devices (OHCI only, UHCI planned)<br>
 **lsdisk**: lists all available drives and general information about them
 
 ### Filesystem
@@ -61,4 +61,13 @@ git clone https://github.com/xiromos/xmode.git
 cd xmode
 chmod +x buildx.sh
 ./buildx.sh
+```
+
+## Required packages to build
+```bash
+# Arch Linux
+sudo pacman -Syu nasm qemu-full mtools
+
+# Linux Mint / Ubuntu
+sudo apt install nasm qemu mtools
 ```
