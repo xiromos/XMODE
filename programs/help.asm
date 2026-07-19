@@ -15,6 +15,21 @@ start:
     mov ah, 0x01
     int 0x30
 
+    mov esi, pci
+    mov ebx, 0x00ffffff
+    mov ah, 0x01
+    int 0x30
+
+    mov esi, lsdisk
+    mov ebx, 0x00ffffff
+    mov ah, 0x01
+    int 0x30
+
+    mov esi, usb
+    mov ebx, 0x00ffffff
+    mov ah, 0x01
+    int 0x30
+
     mov esi, header2
     mov ebx, 0x0003f0fc
     mov ah, 0x01
@@ -55,6 +70,16 @@ start:
     mov ah, 0x01
     int 0x30
 
+    mov esi, sh_header
+    mov ebx, 0x0003f0fc
+    mov ah, 0x01
+    int 0x30
+
+    mov esi, sh
+    mov ebx, 0x00ffffff
+    mov ah, 0x01
+    int 0x30
+
     mov ah, 0x03
     int 0x30
 
@@ -65,6 +90,10 @@ section .data
 header: db '----Standard Commands----', 0x0a, 0
 help: db 'HELP: shows this help message', 0x0a, 0
 clear: db 'CLEAR: clears the screen', 0x0a, 0
+pci: db 'PCI: shows all found PCI devices', 0x0a, 0
+lsdisk: db 'LSDISK: shows all available drives', 0x0a, 0
+usb: db 'USB: shows all available OHCI USB devices', 0x0a, 0x0a, 0
+
 ram: db 'RAM: shows available ram', 0x0a, 0
 reboot: db 'REBOOT: restarts the system', 0x0a, 0x0a, 0
 
@@ -86,4 +115,7 @@ syntax: db 'You can give the command only one argument.', 0x0a,
         db 'the command will ask you for the second argument.', 0x0a,
         db 'If there is any command you doesnt want to execute anymore', 0x0a,
         db 'press "q". This will always bring you back', 0x0a,
-        db 'to the terminal.', 0x0a, 0
+        db 'to the terminal.', 0x0a, 0x0a, 0
+sh_header: db '----Shell Scripts----', 0x0a, 0
+sh: db 'Create Shell-Scripts using the WRITE-Command: WRITE TEST.SH', 0x0a, 
+    db 'Then execute them by typing a ">" and the name: > TEST.SH', 0x0a, 0
