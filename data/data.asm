@@ -15,6 +15,7 @@ start_msg: db '< XMODE Shell >', 0x0a,
            db 'Type "help" for help', 0
 prompt_msg: db '# ', 0
 argument: dd 0
+argument2: dd 0
 scan_codes:
     db 0                  ; 0x00
     db 27                 ; ESC
@@ -137,7 +138,7 @@ tss:
 .end:
 hex4_out: db '0x0000', 0
 hex8_out: db '0x00000000', 0
-mmap_buffer     equ 0x7e00  ;512 bytes after bootloader
+mmap_buffer     equ 0x1ff000
 mmap_entries: dd 0
 mmap_str: db 'Memory Map:           1 - Usable / 2 - Reserved', 0
 memmap_str: db 'MMAP', 0
@@ -160,6 +161,8 @@ cdisk_str: db 'CDISK', 0
 osdev_discord_str: db 'OSDEVDISCORD', 0
 usb_str: db 'USB', 0
 bgcolor_str: db 'BGCOLOR', 0
+cd_str: db 'CD', 0
+meminfo_str: db 'MEMINFO', 0
 command_buffer: db 50 dup(0)
 setbgcolor_helpmsg: db 'Set Background Color.', 0x0a,
                     db 'Usage: ', 0
@@ -223,7 +226,8 @@ CMD_LIST_OFFSET         equ 1024
 ahci_irq: db 0
 
 DRIVE_LIST_ADDR        equ 0x8a700     ; ~0x300 (768) bytes
-DRIVE_LIST_ENTRY       equ 32
+DRIVE_LIST_ENTRY       equ 100
+USB_LIST_ENTRY         equ 40
 avail_disks: db 0
 avail_drives_str: db 'Available Drives: ', 0
 unknown_drive_str: db 'Unknown Drive Type', 0
@@ -315,12 +319,13 @@ usb_keyboard_tdptr: dd 0
 
 usb_keymap:
     times 4 db 0
-    db 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'y', 'k', 'l',
-    db 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'
+    db 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l',
+    db 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'z', 'y'
     db '1', '2', '3', '4', '5', '6', '7', '8', '9', '0'
-    db 0x0a     ;Enter
+    db 0x0d     ;Enter
     db 0x1b     ;ESC
     db 0x08     ;Backspace
+    db 0x09     ;TAB
     db 0x20     ;Space
     db '-'
     db '='
@@ -341,6 +346,11 @@ usb_keymap:
     db 9 dup(0)
     db 4 dup(0)
     times (256-83) db 0
+
+ohci_read_sectors: dd 0
+uhci_read_sectors: dd 0
+ehci_read_sectors: dd 0
+xhci_read_sectors: dd 0
 
 ide_running: db 0
 dma_done: db 0
@@ -376,6 +386,8 @@ cluster16: dw 0
 first_cluster16: dw 0
 file_size16: dd 0
 prev_cluster16: dw 0
+drive_number: db 0
+cur_dir_addr: dd 0
 
 read_error_msg: db 'Error while reading file', 0
 
@@ -401,6 +413,9 @@ dir_configs_str db      "XCONFIGS   "
 file_bgcolor_cfg db     "BGCOLOR CFG"
 dir_drivers_str db      "DRIVERS    "
 file_ohci_sys db        "OHCI    SYS"
+file_sb16_sys db        "SB16    SYS"
+file_intl_aud_sys db    "INTL_AUDSYS"
+file_rtl8139_sys db     "RTL8139 SYS"
 
 CONFIG_DIR_BUFFER equ   0x20000
 CONFIGS_FILE_BUFFER equ 0x20500
@@ -433,27 +448,26 @@ main_task: dw 1
 
 tasks_esp:
     times 11 db 0
-    dd 0        ;task 0 (reserved)
-    dd 0
+    times 4 dd 0    ;task 0 (reserved)
+
     times 11 db 0
-    dd 0        ;task 1 (shell)
-    dd 0
+    times 4 dd 0    ;task 1 (shell)
+
     times 11 db 0
-    dd 0        ;task 2
-    dd 0
+    times 4 dd 0    ;task 2
+
     times 11 db 0
-    dd 0        ;task 3
-    dd 0
+    times 4 dd 0    ;task 3
+
     times 11 db 0
-    dd 0        ;task 4
-    dd 0
+    times 4 dd 0    ;task 4
+
     times 11 db 0
-    dd 0
-    dd 0
+    times 4 dd 0    ;4B Flags, 4B ESP, 4B Program start address, 4B program size
 
 tasks_kernel_stack      equ 0x90000
 tasks_kernel_stack_off  equ 0x1000      ;every task has ~4KB stack
-TASK_SIZE               equ 19
+TASK_SIZE               equ 27
 task_limit: db 'Maximum amount of tasks achieved!', 0
 create_task_err: db 'Error while creating task', 0
 
@@ -478,3 +492,10 @@ RELOCATION_TABLE_CONTENTS   equ 0xeffe00
 program_address: dd 0
 section_text_str: db '.text', 0, 0, 0
 coff_load_err: db 'Error while loading COFF File', 0
+
+wavfile_functions: dd 0
+;+0: play WAV file (EDI = start address of file)
+;+8: interrupt handler of SB16 card
+;+12: pause playing of current WAV file
+;+16: resume playing of current WAV file
+;+20: end playing current WAV file
