@@ -1,7 +1,10 @@
 section .text
 init:
     ;AL = IRQ number
-
+    jmp short .init
+    ;magic string
+    db 'SND '   ;sound card
+.init:
     push ax
     ;get DSP version
     mov dx, 0x22c
@@ -411,10 +414,8 @@ irq_handler:
     mov byte [irq_call], 0
 
 .done_play_block:
-    mov al, 0x20
-    out 0x20, al
     popa
-    iret
+    ret
 .last_block:
     mov ecx, [size]
     
@@ -459,14 +460,11 @@ irq_handler:
 
     jmp .done_play_block
 .done:
-    mov al, 0x20
-    out 0x20, al
-
     mov dword [offset], 0
     mov byte [active], 0
     mov word [bits8], 0
     popa
-    iret
+    ret
 
 section .data
 active: db 0
