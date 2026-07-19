@@ -39,7 +39,7 @@ set_idt:
     xor ebx, ebx
     call set_idt_entry
 
-    mov eax, int_no_err
+    mov eax, int0x1
     mov ebx, 1
     call set_idt_entry
 
@@ -175,8 +175,28 @@ set_idt:
     mov ebx, 0x21
     call set_idt_entry
 
+    mov eax, irq5_handler
+    mov ebx, 0x25
+    call set_idt_entry
+
+    mov eax, irq9_handler
+    mov ebx, 0x29
+    call set_idt_entry
+
+    mov eax, irq10_handler
+    mov ebx, 0x2a
+    call set_idt_entry
+
+    mov eax, irq11_handler
+    mov ebx, 0x2b
+    call set_idt_entry
+
     mov eax, irq14_handler
     mov ebx, 0x2e
+    call set_idt_entry
+
+    mov eax, irq15_handler
+    mov ebx, 0x2f
     call set_idt_entry
 
     mov eax, output_handler
@@ -229,5 +249,67 @@ isr_default:
     popa
     iret
 
-%include "/home/technodon/Downloads/xmode/syscalls/disk.asm"
-%include "/home/technodon/Downloads/xmode/syscalls/windowmngr.asm"
+set_irq:
+    ;EAX = IRQ Handler
+    ;EBX = IRQ number
+    push esi
+    push edx
+    push ecx
+
+    mov ecx, 4
+    cmp ebx, 0x25
+    je .set_irq5
+    cmp ebx, 0x29
+    je .set_irq9
+    cmp ebx, 0x2a
+    je .set_irq10
+    cmp ebx, 0x2b
+    je .set_irq11
+
+    call set_idt_entry
+
+    pop ecx
+    pop edx
+    pop esi
+    stc
+    ret
+.set_irq5:
+    mov edx, eax
+    mov esi, irq5_list
+    jmp .loop
+.set_irq9:
+    mov edx, eax
+    mov esi, irq9_list
+    jmp .loop
+.set_irq10:
+    mov edx, eax
+    mov esi, irq10_list
+    jmp .loop
+.set_irq11:
+    mov edx, eax
+    mov esi, irq11_list
+.loop:
+    cld
+    lodsd
+    cmp eax, 0
+    je .free
+
+    dec ecx
+    jnz .loop
+
+    pop ecx
+    pop edx
+    pop esi
+    stc
+    ret
+.free:
+    sub esi, 4
+    mov [esi], edx  ;set handler
+
+    pop ecx
+    pop edx
+    pop esi
+    clc
+    ret
+%include "syscalls/disk.asm"
+%include "syscalls/windowmngr.asm"
