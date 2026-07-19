@@ -216,7 +216,9 @@ start:
     int 0x30
     mov ah, 0x03
     int 0x30
-    retf
+    
+    mov ah, 0x05
+    int 0x35
 
 .invalid_comb:
     mov esi, invalid_opcode_str
@@ -228,7 +230,9 @@ start:
     int 0x30
     mov ah, 0x03
     int 0x30
-    retf
+    
+    mov ah, 0x05
+    int 0x35
 .newline:
     add dword [line], 1
     jmp .main_loop
@@ -277,7 +281,9 @@ start:
     int 0x30
     mov ah, 0x03
     int 0x30
-    retf
+    
+    mov ah, 0x05
+    int 0x35
 .save_file_err2:
     mov esi, file_save_err
     mov ah, 0x01
@@ -285,7 +291,9 @@ start:
     int 0x30
     mov ah, 0x03
     int 0x30
-    retf
+    
+    mov ah, 0x05
+    int 0x35
 
 .set_bits:
     add esi, 1
