@@ -15,10 +15,15 @@
 ;AH = 0x13: start already loaded task in background                                                     ;EBX = Address in Memory of Task, ESI = pointer to Taskname
 
 ;AH = 0x20: functions for playing a WAV file (BH = subfunction)
-;   BH = 0x01: play WAV file (EDI = start address of file)
+;   BH = 0x01: play WAV file (expects EDI = start address of file)
 ;   BH = 0x02: pause playing current WAV file
 ;   BH = 0x03: resume playing current WAV file
 ;   BH = 0x04: stop playing WAV file
+;AH = 0x21: network functions
+;   BH = 0x01: get network stats
+;       Input: EDI = pointer to 128B buffer
+;       Output: filled buffer
+
 program_sys_handler:
     cmp ah, 0x00
     je get_system_info
@@ -896,6 +901,9 @@ start_task_bg:
 play_wav_file:
     ;EDI = address of file
     pusha
+
+    cmp dword [wavfile_functions], 0
+    je .error
 
     cmp bh, 0x01
     je .play_wavfile
