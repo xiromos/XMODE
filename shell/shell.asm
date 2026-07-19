@@ -72,6 +72,13 @@ exec_cmd:
     mov esi, [argument]
     call string_uppercase
 
+    mov esi, command_buffer
+    push esi
+    lodsb
+    pop esi
+    cmp al, '>'
+    je exec_sh
+
     mov edi, command_buffer
     mov esi, help_str
     call cmp_str
@@ -157,6 +164,16 @@ exec_cmd:
     call cmp_str
     jc .set_bgcolor
 
+    mov edi, command_buffer
+    mov esi, cd_str
+    call cmp_str
+    jc cd_directory
+
+    mov edi, command_buffer
+    mov esi, meminfo_str
+    call cmp_str
+    jc show_memory_info
+
     jmp .exec_program
     ret
 .ahci:
@@ -218,9 +235,110 @@ exec_cmd:
 .done_convert:
     mov [bgcolor], ebx
     call clear_screen
+
+;     xor ah, ah
+;     xor edi, edi
+;     mov esi, dir_configs_str
+;     int 0x33
+
+;     mov ah, 0x0a
+;     int 0x35
+
+;     push esi
+;     push ecx
+
+;     mov edi, esi
+
+;     mov ah, 0x0a
+;     xor edx, edx    ;root directory
+;     mov esi, dir_configs_str
+;     mov bl, [drive_number]
+;     int 0x33
+;     jc .bgcolor_error
+;     mov word [.configs_cluster], ax
+
+;     mov ah, 0x0a
+;     mov edx, edi
+;     add edi, 0x500
+;     mov esi, file_bgcolor_cfg
+;     mov bl, [drive_number]
+;     int 0x33
+;     jc .bgcolor_error
+
+;     mov esi, edi
+;     pop ecx
+
+;     push ecx
+; .loop_bgcolor:
+;     lodsb
+;     dec ecx
+;     jz .bgcolor_error
+
+;     cmp al, 0x0a
+;     je .loop_bgcolor
+;     cmp al, 0x20
+;     je .loop_bgcolor
+
+;     cmp al, '#'
+;     je .bgcolor_skipcomment
+
+;     dec esi
+;     mov edi, [bgcolor]
+;     mov [esi], edi
+
+;     pop ecx
+;     pop esi
+
+;     push esi
+;     push ecx
+
+;     mov ah, 0x0b
+;     movzx edi, word [.configs_cluster]
+;     add esi, 0x500
+;     mov edx, esi
+;     mov esi, file_bgcolor_cfg
+;     mov bl, [drive_number]
+;     int 0x33
+;     jc .bgcolor_error
+
+;     pop ecx
+;     pop esi
+
+;     mov ah, 0x0b
+;     int 0x35
     ret
+; .bgcolor_skipcomment:
+;     lodsb
+;     dec ecx
+;     jz .bgcolor_error
+;     cmp al, 0x0a
+;     jne .bgcolor_skipcomment
+;     jmp .loop_bgcolor
+
+; .bgcolor_error:
+;     pop esi
+;     pop ecx
+;     mov esi, .bgcolor_error_str
+;     mov ebx, COLOR_RED
+;     call print_string
+;     ret
+.bgcolor_error_str: db 'Error while saving backgroundcolor at /XCONFIGS/BGCOLOR.CFG', 0x0a, 0
+.configs_cluster: dw 0
+
+.clear_arg_buffer:
+    mov edi, read_buffer2
+    mov eax, 0xffffffff
+    mov ecx, 3
+    rep stosd
+    
+    mov edi, command_buffer
+    mov ecx, 11
+    jmp .prep_buffer
 .exec_program:
     mov esi, [argument]
+    cmp esi, 0xffffffff
+    je .clear_arg_buffer
+
     mov edi, read_buffer2
     xor ecx, ecx
     call parse_arg_loop
@@ -240,29 +358,19 @@ exec_cmd:
     dec ecx
     jnz .clear_full
 .load_program:
-    mov edi, command_buffer+8
-    mov byte [edi], 'B'
-    mov byte [edi+1], 'I'
-    mov byte [edi+2], 'N'
-
     mov esi, command_buffer
     mov edi, read_buffer
     mov ecx, 11
     repe movsb
 
-    mov ah, 0x08
-    mov esi, read_buffer
-    mov edi, program_addr
-    int 0x33
-    jnc .found_prog
+    mov edi, read_buffer+8
+    mov byte [edi], 'X'
+    mov byte [edi+1], 'M'
+    mov byte [edi+2], 'E'
 
+    xor ah, ah
+    mov edi, [cur_dir_addr]
     mov esi, read_buffer
-    mov byte [esi+8], 'X'
-    mov byte [esi+9], 'M'
-    mov byte [esi+10], 'E'
-    mov edi, program_addr_off
-    imul edi, ecx
-    add edi, program_addr
     int 0x33
     jnc .found_xme_executable
 
@@ -270,129 +378,51 @@ exec_cmd:
     mov byte [esi+8], 'O'
     mov byte [esi+9], 'B'
     mov byte [esi+10], 'J'
-    mov edi, program_addr_off
-    imul edi, ecx
-    add edi, program_addr
+    xor ah, ah
+    mov edi, [cur_dir_addr]
+    mov esi, read_buffer
     int 0x33
     jc .exec_prog_err
 
-    call load_coff_obj
-    jnc .found_prog
-
-    mov esi, coff_load_err
-    mov ebx, COLOR_RED
-    call print_string
-    call print_newline
-    ret
+    jmp .found_prog
 .found_xme_executable:
+    mov al, '+'
+    call print_char
     ;call load_xme
 .found_prog:
-    mov [program_address], edi
+    ;mov [program_address], edi
 
-    mov ax, [max_tasks]
-    cmp word [task_count], ax
-    jae .too_much_tasks
-
-    ;save shell context
-    mov eax, 1
-    imul eax, TASK_SIZE
-    mov edi, tasks_esp
-    add edi, eax
-    mov [edi+15], esp
-    
     mov esi, read_buffer
-    mov dx, [task_slots]
-    mov ecx, 2
+    mov edi, read_buffer
+    mov ebx, [cur_dir_addr]
+    mov ah, 0x02
+    int 0x35
+    jc .program_error
+    ret
+.program_error:
+    cmp ah, 0x01
+    je .program_coff_error
 
-    mov edi, tasks_esp
-    add edi, TASK_SIZE*2     ;skip task 0 + shell
-.find_loop:
-    cmp byte [edi], 0xe5
-    je .found_slot
-    cmp byte [edi], 0
-    je .found_slot
-
-    add edi, TASK_SIZE
-
-    inc ecx
-    dec dx
-    jnz .find_loop
-
-    mov esi, create_task_err
+    mov esi, .program_error_str
     mov ebx, COLOR_RED
     call print_string
     ret
-.found_slot:
-    push esi
-    push ecx
-    mov ecx, 11
-    rep movsb
-    pop ecx
-    pop esi
-
-    mov edi, program_addr_off
-    imul edi, ecx
-    add edi, program_addr
-
-    mov ah, 0x08
-    mov esi, read_buffer
-    int 0x33
-    jc .exec_prog_err
-
-    mov esi, read_buffer2
-    mov [kernel_stack], esp
-
-    mov eax, program_stack_off
-    imul eax, ecx
-    add eax, program_stack
-    mov esp, eax
-
-    mov eax, program_addr_off
-    imul eax, ecx
-    add eax, program_addr
-
-    mov eax, [program_address]
-
-    push ss
-    push esp
-    ;pushfd                 ;bug - if program does infinite loop -> freeze
-    push dword 0x202        ;enable interrupt flag
-    push cs
-    push eax
-
-    pushad
-    push ds
-    push es
-    push fs
-    push gs
-
-    movzx eax, cx
-    imul eax, TASK_SIZE
-    mov edi, tasks_esp
-    add edi, eax
-    mov [edi+15], esp
-
-    mov [main_task], cx
-    inc word [task_count]
-
-    int 0x20
-    ;jmp program_addr
-
-    ;call far code_off_user:program_addr
-    mov esp, [kernel_stack]
-    ret
-.too_much_tasks:
-    mov esi, task_limit
+.program_coff_error:
+    mov esi, .program_coff_error_str
     mov ebx, COLOR_RED
     call print_string
     call print_newline
     ret
+
+.program_error_str: db 'Something went wrong while loading program (Filesystem error)', 0x0a, 0
+.program_coff_error_str: db 'Error while relocating COFF file, are you sure this is a COFF Objekt file?', 0x0a, 0
 .exec_prog_err:
     ret
+
 .show_help:
+    xor ah, ah
+    mov edi, [cur_dir_addr]
     mov esi, program_help_bin
-    mov edi, program_addr
-    mov ah, 0x08
     int 0x33
     jc .exec_prog_err
 
@@ -402,8 +432,6 @@ exec_cmd:
     rep movsb
 
     jmp .found_prog
-    ;call far code_off_user:program_addr
-    ret
 
 .clear_screen:
     call clear_screen
@@ -629,6 +657,8 @@ print_buffer_ls:
     je .print_sys
     cmp al, 0x0a
     je .newline
+    cmp al, 0x08
+    je .print_disk_volume
     cmp al, '$'
     je .done
 
@@ -661,9 +691,17 @@ print_buffer_ls:
     call print_string
     pop esi
     jmp print_buffer_ls
+.print_disk_volume:
+    mov al, ' '
+    call print_char
+    push esi
+    mov esi, .vol_label
+    call print_string
+    pop esi
+    jmp print_buffer_ls
 .done:
     ret
-
+.vol_label: db 'Volume Label', 0
 
 print_dec:
     pusha
@@ -767,7 +805,7 @@ parse_arg_loop:
     je .add_spaces     ;invalid string
     cmp al, '.'     ;chech for extension
     je .add_spaces
-    stosb           ;stores al in ES:DI
+    stosb           ;stores al in EDI
     inc esi
     inc ecx
     cmp ecx, 8
@@ -833,7 +871,23 @@ check_args:
     inc esi
     mov [argument], esi  ;pointer to argument
     ret
+; .search_space2:
+;     mov al, [esi]
+;     cmp al, 0
+;     je .ret_shell
+;     cmp al, ' '
+;     je .save_arg2
+;     inc esi
+;     dec ecx
+;     jnz .search_space2
+;     ret
+; .save_arg2:
+;     inc esi
+;     mov [argument2], esi  ;pointer to argument
+;     ret
 .ret_shell:
+    mov dword [argument], 0xffffffff
+    mov dword [argument2], 0xffffffff
     ret
 
 print_buffer:
@@ -925,7 +979,7 @@ show_mmap:
     call print_newline
     call print_newline
 
-    mov ecx, 10
+    movzx ecx, word [main.memmap_entries]
     mov esi, mmap_buffer
 .loop2:
     mov eax, [esi+4]
@@ -958,8 +1012,51 @@ show_mmap:
     dec ecx
     jnz .loop2
     call print_newline
+
+    mov esi, .usable_mem_str
+    mov ebx, 0x00ffffff
+    call print_string
+
+    mov eax, [main.usable_mem]
+    cmp eax, 0xffffffff
+    jne .skip
+
+    mov esi, .overflow_str
+    call print_string
+    jmp .continue
+.skip:
+    mov ebx, 1000
+    xor edx, edx
+    div ebx
+    call print_dec
+
+    mov esi, .kb_str
+    mov ebx, 0x00ffffff
+    call print_string
+
+    call print_newline
+    mov esi, .available_memory
+    mov ebx, 0x00ffffff
+    call print_string
+
+    mov eax, [main.max_addr]
+    xor edx, edx
+    mov ebx, 1000
+    div ebx
+    call print_dec
+
+    mov esi, .kb_str
+    mov ebx, 0x00ffffff
+    call print_string
+
+.continue:
+    call print_newline
     ret
 
+.usable_mem_str: db 'Usable Memory: ', 0
+.overflow_str: db 'More than 4GB', 0
+.available_memory: db 'Available Memory: ', 0
+.kb_str: db ' KB', 0
 
 show_tasks:
     mov esi, task_list_header
@@ -1223,7 +1320,7 @@ list_drives:
     je .ahci
     cmp byte [esi+9], 0xde
     je .ide
-    cmp byte [esi+9], 0xeb
+    cmp byte [esi+9], 0xbe
     je .usb
     
     mov esi, unknown_drive_str
@@ -1240,30 +1337,186 @@ list_drives:
     mov ebx, 0x00ffffff
     call print_string
     call print_newline
+
     pop eax
     pop esi
     jmp .continue
 .ide:
+    cmp byte [esi+8], 0xaf
+    je .atapi
+
+    push ecx
+    push esi
+
     mov esi, ide_device_str
     mov ebx, 0x00ffffff
     call print_string
     call print_newline
+
+    mov esi, .ide_product_name
+    mov ebx, 0x00ffffff
+    call print_string
+    pop esi
+
+    push esi
+    add esi, 23
+    mov ecx, 32
+    call print_buffer
+    call print_newline
+    pop esi
+
+    push esi
+    mov ebx, [esi+19]       ;block size
+    mov eax, [esi+11]       ;low LBA
+    cmp dword [esi+15], 0
+    jne .lba48
+
+    call .print_size
+    jmp .skip_lba48
+.lba48:
+    push ebx
+    mov esi, show_usb_devices.usb_blocksize_str
+    mov ebx, 0x00ffffff
+    call print_string
+    pop ebx
+
+    mov eax, ebx
+    call print_dec
+
+    mov al, 'B'
+    call print_char
+    call print_newline
+
+    mov esi, .high_storage_str
+    mov ebx, 0x00ffffff
+    call print_string
+
+.skip_lba48:
+    call print_newline
+    ; add esi, 55
+    ; call .print_partitions
+    pop esi
+    pop ecx
+
     pop eax
     pop esi
     jmp .continue
+.ide_product_name: db '   Product name: ', 0
+.high_storage_str: db 'Size: More than 128GB', 0
+.atapi_str: db 'CD / DVD (ATAPI Device)', 0
+
+.atapi:
+    mov esi, .atapi_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+
+    pop eax
+    pop esi
+    jmp .continue
+    ret
 .usb:
+    push ecx
+    push esi
+
     mov esi, usb_storage_str
     mov ebx, 0x00ffffff
     call print_string
     call print_newline
+
+    mov esi, show_usb_devices.usb_vendor_str
+    mov ebx, 0x00ffffff
+    call print_string
+    pop esi
+
+    push esi
+    mov ecx, 8
+    call print_buffer
+    call print_newline
+
+    mov esi, show_usb_devices.usb_productname_str
+    mov ebx, 0x00ffffff
+    call print_string
+
+    pop esi
+
+    push esi
+    add esi, 16
+    mov ecx, 16
+    call print_buffer
+    call print_newline
+    pop esi
+
+    mov eax, [esi+32]
+    mov ebx, [esi+36]
+    call .print_size
+
+    push esi
+
+    ; add esi, 40
+    ; call .print_partitions
+    pop esi
+    pop ecx
+
     pop eax
     pop esi
     jmp .continue
 
 
+.print_size:
+    ;EAX: max. LBA
+    ;EBX: size of one block
+    pusha
+    push ebx
+    push eax
+    mov esi, show_usb_devices.usb_blocksize_str
+    mov ebx, 0x00ffffff
+    call print_string
+    pop eax
+    pop ebx
 
+    push eax
+    mov eax, ebx
+    call print_dec
 
+    mov al, 'B'
+    call print_char
+    call print_newline
+    pop eax
+
+    imul eax, ebx
+
+    push eax
+    mov esi, show_usb_devices.usb_capacity_str
+    mov ebx, 0x00ffffff
+    call print_string
+    pop eax
+
+    xor edx, edx
+    mov ebx, 1000
+    div ebx
+
+    call print_dec
+    
+    mov esi, .kb_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+    
+    popa
+    ret
+.kb_str: db ' KB', 0
+.print_partitions:
+    ret
 change_drive:
+    ;create a new task so shell works fine while task is waiting for disk
+;     .cdrive_str: db 'CDRIVE  SHL', 0
+;     mov ah, 0x03
+;     mov ebx, .change_drive
+;     mov esi, .cdrive_str
+;     int 0x35
+;     ret
+; .change_drive:
     mov esi, [argument]
     call string_uppercase
 
@@ -1307,6 +1560,9 @@ show_usb_devices:
 
     mov esi, USB_DEVICE_LIST
     mov cl, 1
+    movzx dx, byte [usb_devices]
+    cmp dx, 0
+    je .done
 .loop:
     lodsb
     cmp al, 0
@@ -1332,11 +1588,20 @@ show_usb_devices:
     je .done
 .next:
     inc cl
-    add esi, 4
-    jmp .loop
+    add esi, USB_LIST_ENTRY-1
+    dec dx
+    jnz .loop
+    jmp .done
 
 .unknown:
     push esi
+    movzx eax, cl
+    call print_dec
+    mov al, ':'
+    call print_char
+    mov al, 0x20
+    call print_char
+
     mov esi, usb_unknown_str
     mov ebx, 0x00ffffff
     call print_string
@@ -1345,6 +1610,13 @@ show_usb_devices:
     jmp .next
 .keyboard:
     push esi
+    movzx eax, cl
+    call print_dec
+    mov al, ':'
+    call print_char
+    mov al, 0x20
+    call print_char
+
     mov esi, usb_keyboard_str
     mov ebx, 0x00ffffff
     call print_string
@@ -1360,7 +1632,9 @@ show_usb_devices:
     pop esi
     jmp .next
 .usb_stick:
+    push edx
     push esi
+    mov edi, esi
     movzx eax, cl
     call print_dec
     mov al, ':'
@@ -1371,9 +1645,66 @@ show_usb_devices:
     mov esi, usb_stick_str
     mov ebx, 0x00ffffff
     call print_string
+
+    mov ebp, [edi+24]       ;LBA
+    mov edx, [edi+28]       ;block size
+    
+    push ebp
+    push edx
+
+    call print_newline
+    mov esi, .usb_vendor_str
+    call print_string
+
+    mov esi, edi
+    mov ecx, 8
+    call print_buffer
+
+    call print_newline
+    mov esi, .usb_productname_str
+    call print_string
+
+    mov esi, edi
+    add esi, 8
+    mov ecx, 16
+    mov ebx, 0x00ffffff
+    call print_buffer
+
+    call print_newline
+    mov esi, .usb_blocksize_str
+    mov ebx, 0x00ffffff
+    call print_string
+
+    pop edx
+    mov eax, edx
+    call print_dec
+
+    mov al, 'B'
+    mov ebx, 0x00ffffff
+    call print_char
+
+    call print_newline
+    mov esi, .usb_capacity_str
+    mov ebx, 0x00ffffff
+    call print_string
+
+    pop ebp
+    imul edx, ebp
+    mov eax, edx
+    call print_dec
+
+    mov al, 'B'
+    mov ebx, 0x00ffffff
+    call print_char
+
     call print_newline
     pop esi
+    pop edx
     jmp .next
+.usb_vendor_str: db '   Producer: ', 0
+.usb_productname_str: db '   Product name: ', 0
+.usb_capacity_str: db '   Capacity: ', 0
+.usb_blocksize_str: db '   Size of one block: ', 0
 .floppy:
     push esi
     mov esi, usb_floppy_str
@@ -1408,6 +1739,13 @@ show_usb_devices:
     jmp .next
 .error:
     push esi
+    movzx eax, cl
+    call print_dec
+    mov al, ':'
+    call print_char
+    mov al, 0x20
+    call print_char
+
     mov esi, usb_error_str
     mov ebx, 0x00ffffff
     call print_string
@@ -1417,4 +1755,11 @@ show_usb_devices:
 .done:
     popa
     ret
+
+cd_directory:
+    ret
+
+show_memory_info:
+    ret
 %include "shell/coff_loader.asm"
+%include "shell/shscripts.asm"
