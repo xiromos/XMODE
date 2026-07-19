@@ -761,6 +761,20 @@ ahci_init:
     je .no_ahci
     mov eax, [abar]
 
+    mov ebx, [eax+4]
+    or ebx, (1 << 31)                   ;set Bit 31 (AHCI Enable) to set Controller into AHCI mode (not legacy IDE)
+    mov [eax+4], ebx
+
+    or dword [eax+4], (1 << 0)          ;set Bit 0 to reset the controller
+.wait_reset:
+    mov ebx, [eax+4]
+    test ebx, (1 << 0)
+    jnz .wait_reset
+
+    mov ebx, [eax+4]
+    or ebx, (1 << 31)                   ;set AHCI mode again because it might be deleted after reset
+    mov [eax+4], ebx
+
     mov esi, ahci_device_list_addr      ;0x8b000
     mov ebx, [eax+0xc]                  ;Ports Implemented
     xor ecx, ecx
@@ -776,6 +790,7 @@ ahci_init:
     inc ecx
     jmp .loop
 .done:
+    or dword [eax+4], (1 << 1)          ;enable global interrupts
     mov byte [ahci_active], 1
     popa
     ret
@@ -810,9 +825,9 @@ ahci_init:
     mov edx, [edi+0x24]     ;PxSIG
     test edx, edx
     jz .empty_port
+
     mov [esi+8], edx        ;0x00000101 = SATA, 0xEB140101 = ATAPI
     inc word [ahci_devices]
-    mov dword [edi+0x14], 0xffffffff        ;enable interrupts
 
     movzx edx, byte [avail_disks]
     imul edx, DRIVE_LIST_ENTRY
@@ -837,21 +852,6 @@ ahci_init:
     test ebx, (1 << 14)
     jnz .wait
 
-
-    push edi
-    push ecx
-    push eax
-
-    mov edi, [edi]      ;Command List Base
-
-    xor eax, eax
-    mov ecx, 1024/4
-    rep stosd
-
-    pop eax
-    pop ecx
-    pop edi
-
     ;set command lists
     push edi
     mov edi, AHCI_PORT_MEM_OFF
@@ -864,6 +864,22 @@ ahci_init:
     mov dword [edi+4], 0    ;PxCLBU
 
     push edi
+    push ecx
+    push eax
+
+    mov edi, [edi]      ;Command List Base
+    imul ecx, 32
+    add edi, ecx
+
+    xor eax, eax
+    mov ecx, 32/4
+    rep stosd
+
+    pop eax
+    pop ecx
+    pop edi
+
+    push edi
     mov edi, AHCI_PORT_MEM_OFF
     imul edi, ecx
     add edi, AHCI_MEM_BASE
@@ -871,15 +887,38 @@ ahci_init:
     mov edx, edi            ;address of Reveived FIS
     pop edi
 
-    mov [edi+0x8], edx
-    mov dword [edi+12], 0
+    mov [edi+0x8], edx      ;PxFB
+    mov dword [edi+12], 0   ;PxFBU
 
+    mov dword [edi+0x30], 0xffffffff        ;clear PxSERR
+    mov dword [edi+0x10], 0xffffffff        ;clear Interrupt Status
+    mov dword [edi+0x14], 0xffffffff        ;clear Interrupt Enable
 
     mov ebx, [edi+0x18]
     or ebx, (1 << 4)        ;FIS Receive Enable
     or ebx, (1 << 1)        ;SUD
+    or ebx, (1 << 28)       ;set active bit
+    mov [edi+0x18], ebx
+
+.wait_fre:
+    bt dword [eax+0x18], 14
+    jnc .wait_fre
+
+    mov ebx, [edi+0x18]
     or ebx, (1 << 0)        ;ST
     mov [edi+0x18], ebx
+.wait_start:
+    bt dword [eax+0x18], 15
+    jnc .wait_start
+
+    cmp dword [edi+0x24], 0xeb140101
+    je .empty_port                          ;skip IDENTIFY because device is an ATAPI device
+
+    push eax
+    mov al, cl
+    call identify_ahci
+    pop eax
+    mov dword [edi+0x14], 0x00000025       ;enable Interrupts
 .empty_port:
     add esi, 12
     inc ecx
@@ -890,7 +929,7 @@ ahci_init:
     ret
 
 
-read_ahci:
+identify_ahci:
     pusha
     ;AL = AHCI Port
 
@@ -910,8 +949,6 @@ read_ahci:
     ; Px + 0x34  SACT
     ; Px + 0x38  CI    (Command Issue)
 
-    ;cmp eax, 1000
-    ;ja .too_much_sectors
     xor ah, ah
     cmp ax, [ahci_devices]      ;check if device is valid
     ;jae .no_device
@@ -971,15 +1008,18 @@ read_ahci:
     mov dword [edi+12], 0
 
     ;set PRDT
-    mov dword [esi+0x80], 0x5000        ;example
-    mov dword [esi+0x84], 0
-    mov dword [esi+0x88], 511
-    mov dword [esi+0x8C], (1 << 31)
+    mov dword [esi+0x80], 0x5000        ;low address
+    mov dword [esi+0x84], 0             ;high address
+    mov dword [esi+0x88], 0             ;reserved
+    mov ebx, (1 << 31)
+    or ebx, 511
+    mov dword [esi+0x8C], ebx           ;byte count + interrupt on completion
 
     ;set FIS
     mov byte [esi], 0x27
     mov byte [esi+1], 0x80
-    mov byte [esi+2], 0xec      ;read DMA extended
+    mov byte [esi+2], 0xec      ;IDENTIFY Command
+    mov byte [esi+3], 0         ;features byte
     mov byte [esi+4], 0         ;LBA 0
     mov byte [esi+5], 0         ;LBA 1
     mov byte [esi+6], 0         ;LBA 2
@@ -997,12 +1037,33 @@ read_ahci:
     mov dword [eax+0x10], 0xffffffff    ;interrupt status
     mov ebx, 1
     shl ebx, cl
+
+.wait_busy:
+    mov ecx, [eax+0x20]
+    test ecx, 0x88      ;check if Bit 3 and Bit 7 are 0 (busy and data request)
+    jnz .wait_busy
+
     mov edx, [eax+0x38]
     or edx, ebx
-    mov [eax+0x38], edx
-    popa
-    ret
+    mov [eax+0x38], edx     ;set PxCI
+.wait_command:
+    mov esi, [eax+0x30]
+    test esi, esi
+    jnz .error
 
+    mov ecx, [eax+0x20]
+
+    mov edx, [eax+0x38]
+    test edx, ebx
+    jnz .wait_command
+
+    popa
+    clc
+    ret
+.error:
+    popa
+    stc
+    ret
 
 ; Drive List in Memory at 0x8a700
 
@@ -1017,17 +1078,24 @@ read_ahci:
 ; BYTE 1:  Master / Slave
 ; BYTE 2:  Primary / Secondary  (1 = primary, 2 = secondary)
 ; WORD 1:  Base Channel
-; Byte 3:  ATA / ATAPI (0x00 = ATA, 0xaf = ATAPI)
+; BYTE 3:  ATA / ATAPI (0x00 = ATA, 0xaf = ATAPI)
 ; BYTE 4:  0xDE (Drive Type)
 ; BYTE 5:  Busmastering DMA supported (1 = yes, 0 = no)
+; QWORD 1: Max. LBA
+; DWORD 1: Block size
+; 32 BYTES: Vendor + Product name
+; 40 BYTES: MBR partition information
 
 ; USB
+; 8 BYTES: Vendor ID
+; BYTE 1: Host Controller Interface (0x10 = OHCI, 0x15 = UHCI, 0x20 = EHCI, 0x30 = XHCI)
+; BYTE 2: 0xBE (Drive Type)
+; WORD 1: USB Address
 ; DWORD 1: Base (OHCI_BASE)
-; BYTE 1: Port Number
-; BYTE 2: Host Controller Interface (0x10 = OHCI, 0x15 = UHCI, 0x20 = EHCI, 0x30 = XHCI)
-; WORD 1: alignment
-; BYTE 3: Alignment
-; BYTE 4: 0xBE (Drive Type)
+; 16 BYTES: Product name
+; DWORD 2: max. LBA
+; DWORD 3: block size
+; 40 BYTES: MBR partition information
 ide_init:
     pusha
     ; PCI
@@ -1058,6 +1126,17 @@ ide_init:
     mov byte [edi+4], 0xa0
     mov byte [edi+5], 1
     mov word [edi+6], dx
+    mov [edi+11], eax       ;low LBA
+    mov [edi+15], ebp       ;high LBA
+    mov [edi+19], ebx       ;block size
+
+    push edi
+    add edi, 23
+    mov ecx, 32
+    mov esi, .name_buffer
+    rep movsb
+    pop edi
+
     cmp cl, 0xaf
     jne .ata1
 
@@ -1088,6 +1167,17 @@ ide_init:
     mov byte [edi+4], 0xb0
     mov byte [edi+5], 1
     mov word [edi+6], dx
+    mov [edi+11], eax       ;low LBA
+    mov [edi+15], ebp       ;high LBA
+    mov [edi+19], ebx       ;block size
+
+    push edi
+    add edi, 23
+    mov ecx, 32
+    mov esi, .name_buffer
+    rep movsb
+    pop edi
+
     cmp cl, 0xaf
     jne .ata2
 
@@ -1118,6 +1208,17 @@ ide_init:
     mov byte [edi+4], 0xa0
     mov byte [edi+5], 2
     mov word [edi+6], dx
+    mov [edi+11], eax       ;low LBA
+    mov [edi+15], ebp       ;high LBA
+    mov [edi+19], ebx       ;block size
+
+    push edi
+    add edi, 23
+    mov ecx, 32
+    mov esi, .name_buffer
+    rep movsb
+    pop edi
+
     cmp cl, 0xaf
     jne .ata3
 
@@ -1148,6 +1249,17 @@ ide_init:
     mov byte [edi+4], 0xb0
     mov byte [edi+5], 2
     mov word [edi+6], dx
+    mov [edi+11], eax       ;low LBA
+    mov [edi+15], ebp       ;high LBA
+    mov [edi+19], ebx       ;block size
+
+    push edi
+    add edi, 23
+    mov ecx, 32
+    mov esi, .name_buffer
+    rep movsb
+    pop edi
+
     cmp cl, 0xaf
     jne .ata4
 
@@ -1166,6 +1278,8 @@ ide_init:
 .done:
     popa
     ret
+.name_buffer: times 32 db 0
+
 
 identify_ata:
     ;DX = 1. Channel
@@ -1228,11 +1342,41 @@ identify_ata:
 .no_dma:
     xor bl, bl      ;DMA not supported
 .end:
+    mov ecx, 16
+    mov esi, 0x200000+54
+    mov edi, ide_init.name_buffer
+.end1:
+    lodsw
+    xchg al, ah
+    stosw
+    dec ecx
+    jnz .end1
+
+    mov esi, 0x200000
+
+    mov ebx, 512
+    test word [esi+212], (1 << 12)
+    jz .skip_read_blocksize
+
+    mov ebx, [esi+234]
+    shl ebx, 1          ;block size
+.skip_read_blocksize:
+    test word [esi+166], (1 << 10)
+    jnz .lba48
+
+    mov eax, [esi+120]  ;max LBA
+    xor ebp, ebp
+.done:
+    xor cl, cl
     clc
     ret
 .no_device:
     stc
     ret
+.lba48:
+    mov eax, [esi+200]      ;low LBA
+    movzx ebp, word [esi+204]
+    jmp .done
 .error:
     ;check if its an ATAPI device
     mov dx, bx
@@ -1351,12 +1495,42 @@ read_drive:
     call read_ide_dma
     jc .error
     jmp .done
+
 .ahci:
-    call read_ahci
+    ;call read_ahci
     jc .error
     jmp .done
+
+
 .usb:
+    mov al, [esi+8]
+    cmp al, 0x10
+    je .ohci
+    cmp al, 0x15
+    je .uhci
+    cmp al, 0x20
+    je .ehci
+    cmp al, 0x30
+    je .xhci
+
+    jmp .error
+
+.ohci:
+    ; call dword [ohci_read_sectors]
+    ; jc .error
+    ; jmp .done
+    jmp .error
+.uhci:
+    call dword [uhci_read_sectors]
+    jc .error
     jmp .done
+.ehci:
+    call dword [ehci_read_sectors]
+    jc .error
+    jmp .done
+.xhci:
+    call dword [xhci_read_sectors]
+    jc .error
 .done:
     popa
     clc
