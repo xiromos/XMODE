@@ -1,9 +1,8 @@
 ;=================================================
-;Basic functions
+;Basic output functions
 ;Copyright (C) 2026 Technodon
 ;=================================================
 
-;--white--
 ;ESI: pointer to string
 ;EBX: color
 print_string:
@@ -137,9 +136,12 @@ draw_char:
 clear_screen:
     pusha
     mov edi, [frame_buffer]
-    mov ecx, width*height
-    mov ebx, 0x00111111
-    mov [bgcolor], ebx
+    mov ecx, [real_width]
+    imul ecx, [real_height]
+    ;mov ecx, width*height
+    mov ebx, [bgcolor]
+    ;mov ebx, 0x00111111
+    ;mov [bgcolor], ebx
 .loop:
     mov dword [edi], ebx
     movzx eax, byte [bpp]
@@ -161,7 +163,8 @@ scroll:
     add esi, eax
 
     ;size = pitch * (height - 16)
-    mov eax, height
+    mov eax, [real_height]
+    ;mov eax, height
     sub eax, [rows]
     imul eax, [pitch]
 
@@ -171,7 +174,8 @@ scroll:
     ;clear last row
     mov edi, [frame_buffer]
 
-    mov eax, height
+    mov eax, [real_height]
+    ;mov eax, height
     sub eax, [rows]
     imul eax, [pitch]
     add edi, eax
@@ -179,9 +183,14 @@ scroll:
     mov ecx, [rows]
     imul ecx, [pitch]
 
-    mov eax, 0x00111111
-    rep stosb
-    mov [bgcolor], eax
+    mov eax, [bgcolor]
+    movzx edx, byte [bpp]
+.loop:
+    mov [edi], eax
+    add edi, edx
+    dec ecx
+    jnz .loop
+    ;mov [bgcolor], eax
 
     popa
     ret
