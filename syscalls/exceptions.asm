@@ -23,6 +23,16 @@ int0x0:
     popa
     add dword [esp], 1
     iret
+int0x1:
+    pop eax
+    pop ebx
+    pop ecx
+    pop edx
+    pop esi
+    pop edi
+    mov ebp, 0x12345678
+    cli
+    hlt
 
 int0x6:
     pusha
@@ -337,6 +347,7 @@ irq1_handler:
     cmp al, 0x3b        ;F1
     jne .done
     call switch_tasks
+    xor al, al
 .done:
     push ax
     mov al, 0x20
@@ -710,13 +721,13 @@ irq15_handler:
 ahci_interrupt_handler:
     cli
     pusha
-    mov al, '!'
-    call print_char
+
     mov eax, [abar]
-    test dword [eax+4], (1 << 23)
+    mov ebx, [eax+8]
+    test ebx, ebx
     jz .done                ;interrupt did not came from the AHCI controller
 
-    or dword [eax+4], (1 << 23)     ;set Bit 23 to end interrupt
+    mov [eax+8], ebx        ;quit interrupt
 
     mov ebx, [eax+8]        ;IS
     ;check which port interrupted... (bit 1 set = port 1, bit 2 set = port 2,...)
@@ -734,24 +745,19 @@ ahci_interrupt_handler:
     jnz .loop
 
 .done:
-    mov al, 0x20
-    out 0xa0, al
-    out 0x20, al
-
     popa
-    iret
+    ret
 
 ohci_interrupt_handler:
     cli
     pusha
-    ; cmp byte [usb_keyboard_used], 1
-    ; jne .skip_keyboard
 
     mov eax, [ohci_base]
     mov ebx, [eax+12]       ;interrupt status
     test ebx, (1 << 1)
     jz .done                ;no WDH
     or ebx, (1 << 1)
+    ;mov ebx, (1 << 1)      ;clear only WDH
     mov [eax+12], ebx
 
     ; test ebx, 2
@@ -869,16 +875,115 @@ ohci_interrupt_handler:
     ; cli
     ; hlt
 .done:
+    popa
+    ret
+
+.last_keyreport: db 0 dup(8)
+
+
+irq5_handler:
+    pusha
+    mov esi, irq5_list
+    mov ecx, 4
+.loop:
+    cld
+    lodsd
+    cmp eax, 0
+    je .skip
+
+    push esi
+    push ecx
+    call eax
+    pop ecx
+    pop esi
+.skip:
+    dec ecx
+    jnz .loop
+
+    mov al, 0x20
+    out 0x20, al
+    popa
+    iret
+
+irq9_handler:
+    pusha
+    mov esi, irq9_list
+    mov ecx, 4
+.loop:
+    cld
+    lodsd
+    cmp eax, 0
+    je .skip
+
+    push esi
+    push ecx
+    call eax
+    pop ecx
+    pop esi
+.skip:
+    dec ecx
+    jnz .loop
+
     mov al, 0x20
     out 0xa0, al
     out 0x20, al
     popa
     iret
 
-.last_keyreport: db 8
+irq10_handler:
+    pusha
+    mov esi, irq10_list
+    mov ecx, 4
+.loop:
+    cld
+    lodsd
+    cmp eax, 0
+    je .skip
 
+    push esi
+    push ecx
+    call eax
+    pop ecx
+    pop esi
+.skip:
+    dec ecx
+    jnz .loop
 
+    mov al, 0x20
+    out 0xa0, al
+    out 0x20, al
+    popa
 
+    iret
+irq11_handler:
+    pusha
+    mov esi, irq11_list
+    mov ecx, 4
+.loop:
+    cld
+    lodsd
+    cmp eax, 0
+    je .skip
+
+    push esi
+    push ecx
+    call eax
+    pop ecx
+    pop esi
+.skip:
+    dec ecx
+    jnz .loop
+
+    mov al, 0x20
+    out 0xa0, al
+    out 0x20, al
+    popa
+    iret
+
+irq5_list: times 4 dd 0
+irq9_list: times 4 dd 0
+irq10_list: times 4 dd 0
+irq11_list: times 4 dd 0
 
 rsod:
     ret
