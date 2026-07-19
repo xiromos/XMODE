@@ -3,6 +3,7 @@
 ;Copyright (C) 2026 Technodon
 ;=============================================================
 
+;ERROR using Argument -R after -C crashes
 section .text
 start:
     ;ARG1 (ESI): filename
@@ -132,7 +133,7 @@ pause_err_msg: db 'Error while pausing audio. No WAV file currently playing', 0x
 resume_err_msg: db 'Error while trying to resume play WAV file. No WAV file currently playing', 0x0a, 0
 
 help_msg:
-    db 'WAVPLAY - program for playing a WAV file', 0x0a,
+    db 'WAVPLAY - program for playing WAV files', 0x0a,
     db 'Supported arguments: ', 0x0a,
     db '<filename.wav>: play this WAV file', 0x0a,
     db '-p: pause play of WAV file', 0x0a,
