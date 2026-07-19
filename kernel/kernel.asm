@@ -480,17 +480,17 @@ remap_pic:
     out 0A1h,al             ; Second PIC
 
     ; change PIT frequenzy
-    push edx
-    mov dx, 0x43
-    mov al, 0x36
-    out dx, al
+    ; push edx
+    ; mov dx, 0x43
+    ; mov al, 0x36
+    ; out dx, al
 
-    mov ax, PIT_DIVISOR
-    mov dx, 0x40
-    out dx, al
-    shr ax, 8
-    out dx, al
-    pop edx
+    ; mov ax, PIT_DIVISOR
+    ; mov dx, 0x40
+    ; out dx, al
+    ; shr ax, 8
+    ; out dx, al
+    ; pop edx
     pop eax
 
     ret
@@ -602,6 +602,9 @@ scan_disk_pci:
 
     cmp ax, 0xffff
     je .skip
+
+    cmp ax, 0x10ec  ;Realtek Semiconductor Co., Ltd.
+    je .vendor_realtek
 
     push ax
     mov al, [pci_bus]
@@ -741,7 +744,7 @@ scan_disk_pci:
 
     movzx ebx, al
     mov eax, ahci_interrupt_handler
-    call set_idt_entry
+    call set_irq
 
     mov byte [ahci_found], 1
     ;call ahci_init
@@ -812,7 +815,7 @@ scan_disk_pci:
     add al, 0x20
     movzx ebx, al
     mov eax, ohci_interrupt_handler
-    call set_idt_entry
+    call set_irq
 
     ;call get_ohci_devices
     mov byte [ohci_found], 1
@@ -824,20 +827,7 @@ scan_disk_pci:
 .found_audiodev:
     mov byte [intel_hd_audio], 1
 
-    mov eax, 0x80000000
-    movzx ebx, byte [pci_bus]
-    shl ebx, 16
-    or eax, ebx
-
-    movzx ebx, byte [pci_device]
-    shl ebx, 11
-    or eax, ebx
-
-    movzx ebx, byte [pci_function]
-    shl ebx, 8
-    or eax, ebx
-
-    mov ecx, eax
+    call get_pci_addr
 
     call read_bar0
     mov [intel_audiodev_base], eax
@@ -862,17 +852,53 @@ scan_disk_pci:
     mov byte [edi], '$'
     mov byte [ide_running], 0
     ret
+;######################################################################################
+;################################# PCI VENDORS ########################################
+;######################################################################################
+.vendor_realtek:
+    shr eax, 16
+    cmp ax, 0x8139
+    je .found_rtl8139
+    cmp ax, 0x8169
+    je .found_rtl_8169
+    jmp .next_device
+.found_rtl8139:
+    mov byte [rtl8139_found], 1     ;found network card
+
+    call get_pci_addr
+
+    call read_bar0
+    ;and eax, 0xfffffffe
+    mov [rtl8139_base], eax          ;bit 1 = 1: IO-Port, bit 1 = 0: MMIO
+
+    mov eax, ecx
+    add eax, 0x04
+    call pci_read
+
+    or eax, (1 << 2)        ;activate busmastering bit
+    or eax, (1 << 0)        ;activate DMA
+    mov ebx, eax
+    mov eax, ecx
+    call pci_write
+
+    mov eax, ecx
+    add eax, 0x3c
+    call pci_read
+
+    add al, 0x20
+    mov [rtl8139_irq], al
+    jmp .next_device
+.found_rtl_8169:
+    jmp .next_device
+;######################################################################################
+;################################# PCI FUNCTIONS ######################################
+;######################################################################################
 pci_read:
     ;EAX = PCI adress
     mov dx, 0xcf8
     out dx, eax
     mov dx, 0xcfc
     in eax, dx
-    ; push eax
-    ; mov edx, eax
-    ; call print_hex4
-    ; pop eax
-    ; hlt
     ret
 pci_write:
     ;EAX = PCI adress
@@ -965,7 +991,25 @@ init_system:
 
     mov ah, 0x05
     int 0x35
+get_pci_addr:
+    ;Output: ECX / EAX = PCI Address
+    mov eax, 0x80000000
+    movzx ebx, byte [pci_bus]
+    shl ebx, 16
+    or eax, ebx
 
+    movzx ebx, byte [pci_device]
+    shl ebx, 11
+    or eax, ebx
+
+    movzx ebx, byte [pci_function]
+    shl ebx, 8
+    or eax, ebx
+
+    mov ecx, eax
+    ret
+
+;######################################################################################
 load_configs:
     ;load configs directory
     mov esi, dir_configs_str
@@ -1048,7 +1092,7 @@ set_pages:
     rep stosd
 
     mov edi, PAGES_BASE
-    mov ecx, 4          ;map 20MB (5 pages)
+    mov ecx, 4          ;map 20MB (4 pages)
     mov esi, PAGE_DIR
     xor eax, eax
 .loop:
@@ -1178,9 +1222,21 @@ load_drivers:
     int 0x33
     jc .drivers_dir_err
 
+    call .check_sb16_soundcard
+.loop:
     cmp byte [ohci_found], 1
-    jne .skip_ohci
+    je .found_ohci
+    cmp byte [intel_hd_audio], 1
+    je .found_intel_audiodev
+    cmp byte [rtl8139_found], 1
+    je .found_rtl8139
 
+    ret
+;######################################################################################
+;################################ OHCI CONTROLLER #####################################
+;######################################################################################
+.found_ohci:
+    mov byte [ohci_found], 0
     mov esi, file_ohci_sys
     mov edi, OHCI_DRIVER_ADDR
     mov edx, DIR_DRIVERS_ADDR
@@ -1189,9 +1245,10 @@ load_drivers:
     int 0x33
 
     mov eax, [ohci_base]
-    call OHCI_DRIVER_ADDR
+    call dword OHCI_DRIVER_ADDR
     cmp ah, 0
-    je .skip_ohci
+    je .loop
+
     mov [usb_devices], ah
 
     mov [usb_keybuffer], edx
@@ -1210,17 +1267,23 @@ load_drivers:
     je .usb_stick
 
     cmp al, 0xee
-    je .skip_ohci
+    je .loop
     add esi, USB_LIST_ENTRY-1
 
     dec dx
     jnz .loop_usb
+
+    mov byte [ohci_found], 0
+    jmp .loop
 
 .keyboard:
     mov byte [usb_keyboard_used], 1
     add esi, USB_LIST_ENTRY-1
     dec dx
     jnz .loop_usb
+
+    mov byte [ohci_found], 0
+    jmp .loop
 .usb_stick:
     movzx edi, byte [avail_disks]
     imul edi, DRIVE_LIST_ENTRY
@@ -1259,52 +1322,72 @@ load_drivers:
     add esi, USB_LIST_ENTRY-1
     dec dx
     jnz .loop_usb
-.skip_ohci:
-    ; #### Test if SB16 card is available ####
+
+    mov byte [ohci_found], 0
+    jmp .loop
+
+;######################################################################################
+;############################# SOUND BLASTER 16 #######################################
+;######################################################################################
+.check_sb16_soundcard:
     call .check_sb16_card
     cmp al, 0xaa
-    jne .skip_sb16
+    jne .done
 
     mov esi, file_sb16_sys
     call load_driver_file
-    jc .skip_sb16
+    jc .done
 
     ; driver expects in AL IRQ number to use
     xor al, al
-    or al, (1 << 1)     ;IRQ 7 (QEMU has a bug which puts the IRQ handler of SB16 always to IRQ5, so this configuration is ignored on QEMU, but should work on real hardware and other emulators)
+    or al, (1 << 1)     ;IRQ 5 (QEMU has a bug which puts the IRQ handler of SB16 always to IRQ5, to be compatible with QEMU i put it there, too)
 
     call edi
 
     push edx
-    cli
     mov eax, [edx+8]
     mov ebx, 0x25
-    call set_idt_entry
-    sti
+    call set_irq
     pop edx
 
     mov [wavfile_functions], edx
-
-    ; mov ah, 0x0a
-    ; xor edx, edx
-    ; mov edi, 0x100000
-    ; mov esi, .test_file
-    ; mov bl, [drive_number]
-    ; int 0x33
-
-    ; call dword [play_wavfile]
-.skip_sb16:
-    cmp byte [intel_hd_audio], 1
-    jne .skip_intel_audiodev
-
+.done:
+    ret
+;######################################################################################
+;############################## INTEL HD AUDIO ########################################
+;######################################################################################
+.found_intel_audiodev:
     mov esi, file_intl_aud_sys
     call load_driver_file
+    jc .skip_intel_audiodev
 
     mov eax, [intel_audiodev_base]
     call edi
 .skip_intel_audiodev:
-    ret
+    mov byte [intel_hd_audio], 0
+    jmp .loop
 
+;######################################################################################
+;############################# RTL8139 ################################################
+;######################################################################################
+.found_rtl8139:
+    mov esi, file_rtl8139_sys
+    call load_driver_file
+    jc .skip_rtl8139
+
+    mov eax, [rtl8139_base]
+    call edi
+
+    mov eax, [edx+4]
+    movzx ebx, byte [rtl8139_irq]
+    call set_irq
+
+.skip_rtl8139:
+    mov byte [rtl8139_found], 0
+    jmp .loop
+
+;#################### END OF DRIVER INITIALIZATION ####################################
+;######################################################################################
 ; Error loading drivers directory
 .drivers_dir_err:
     call print_newline
@@ -1399,10 +1482,14 @@ load_driver_file:
 %include "syscalls/system.asm"
 font8x16:
     incbin "data/DEFAULT.FNT"
+    ;incbin "build/font_ru_RU.fnt"
 disk_error_msg: db 'Disk Read Error', 0
 usb_devices: db 0
 intel_hd_audio: db 0
 intel_audiodev_base: dd 0           ;MMIO Base Address
+rtl8139_found: db 0
+rtl8139_base: dd 0
+rtl8139_irq: db 0
 
 PIT_DIVISOR     equ 0xe90b
 ;memory map
