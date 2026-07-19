@@ -161,12 +161,20 @@ fs16_get_file_list:
     je .dir
     cmp byte [esi+0xb], 0x24
     je .system
+    cmp byte [esi+0xb], 0x08
+    je .vol_label
 
     mov al, '#'
     stosb
     jmp .continue
 .system:
     mov al, '%'
+    stosb
+    mov al, 0x0a
+    stosb
+    jmp .free_entry
+.vol_label:
+    mov al, 0x08
     stosb
     mov al, 0x0a
     stosb
