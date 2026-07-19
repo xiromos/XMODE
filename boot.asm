@@ -1,3 +1,10 @@
+;=========================================================================
+;64-Bit Bootloader for xmode OS
+;stored in the directory /EFI/BOOT/
+;-------------------------------------------------------------------------
+;Copyright (C) 2026 Technodon
+;=========================================================================
+
 section .text
     global _efi_main
 
@@ -186,12 +193,13 @@ _efi_main:
     lea rsi, [rel kernel_found_str]
     call print_string
 
+.get_mmap:
     ;get memory map
     mov rax, [rel system_table]
     mov rax, [rax+SYSTEM_TABLE.BOOT_SERVICES]
 
     lea rcx, [rel mmap_size]
-    lea rdx, [rel mmap]
+    mov rdx, [rel mmap]
     lea r8, [rel map_key]
     lea r9, [rel desc_size]
 
@@ -202,7 +210,9 @@ _efi_main:
     add rsp, 48
 
     test rax, rax
-    jnz .mmap_fail
+    jnz .get_mmap
+
+    call .copy_mmap
 
     mov rax, [rel system_table]
     mov rax, [rax+SYSTEM_TABLE.BOOT_SERVICES]
@@ -219,6 +229,59 @@ _efi_main:
     jmp exit_boot
     cli
     hlt
+.copy_mmap:
+    xor rdx, rdx
+    mov rax, [rel mmap_size]
+    mov rcx, [rel desc_size]
+    div rcx
+    mov rcx, rax
+
+    xor rbx, rbx
+
+    mov rsi, [rel mmap]
+    mov rdi, MEM_MAP_ADDR
+    mov rdx, [rel desc_size]
+.loop_copy:
+    mov eax, [rsi]
+    cmp eax, 0
+    jne .no_nullentry
+
+    add rsi, rdx
+    dec rcx
+    jnz .loop_copy
+    jmp .done_copy
+.no_nullentry:
+    movzx rax, dword [rsi]          ;type
+    cmp eax, 7
+    je .free_mem
+    cmp eax, 3
+    je .free_mem
+    cmp eax, 4
+    je .free_mem
+
+    mov dword [rdi+16], 2
+.continue_copy:
+    mov rax, [rsi+8]        ;start address
+    mov [rdi], rax
+
+    mov rax, [rsi+24]       ;size in 4Kib pages
+    shl rax, 12
+    mov [rdi+8], rax
+
+    add rdi, 20
+    add rsi, rdx
+
+    inc rbx
+    dec rcx
+    jnz .loop_copy
+
+.done_copy:
+    lea rsi, [rel kernel_packet]
+    mov [rsi+8], ebx
+    ret
+.free_mem:
+    mov dword [rdi+16], 1
+    jmp .continue_copy
 .next_mode:
     inc rsi
     jmp .search_loop
@@ -300,12 +363,15 @@ get_vendor:
 
 
 exit_boot:
+    mov dword [rel kernel_packet+12], 20
 
     mov rdx, [rel frame_buffer]     ;assumes that the frame buffer is a 32bit address
     lea rsi, [rel firmware_vendor]
+    mov [rel kernel_packet], rsi
     mov ecx, [rel bpp]
     mov ebx, [rel width]
     mov edi, [rel height]
+    lea rsi, [rel kernel_packet]
     mov rax, 0x8000+250
     jmp rax
 
@@ -369,7 +435,7 @@ no_xga_str: dw 'N','o',' ','X','G','A',' ','f','o','u','n','d',0
 xmode_bin: dw '\','X','M','O','D','E','.','B','I','N'
 xmode_file: dq 0
 xmode_size: dq 0
-bootservices_fail: dw 'N','o',' ','B','o','o','t',' ','S','e','r','v','c','e','s',' ','f','o','u','n','d',0
+bootservices_fail: dw 'N','o',' ','B','o','o','t',' ','S','e','r','v','i', 'c','e','s',' ','f','o','u','n','d',0
 root_failed_str: dw 'F','a','i','l','e','d',' ','t','o',' ','o','p','e','n',' ','r','o','o','t',0
 file_not_found: dw 'K','e','r','n','e','l',' ','n','o','t',' ','f','o','u','n','d',0
 kernel_found_str: dw 'K','e','r','n','e','l',' ','l','o','a','d','e','d', 0
@@ -385,3 +451,18 @@ desc_size       dq 0
 desc_ver        dd 0
 
 file_info: times 32 db 0
+
+MEM_MAP_ADDR            equ 0x70000
+
+section .bss
+kernel_packet:
+    resq 1        ;pointer to buffer with firmware vendor
+    ;memory map
+    resd 1        ;memory map entries
+    resd 1        ;size of one entry
+
+    ;video output
+    resd 1        ;frame buffer
+    resd 1        ;width
+    resd 1        ;height
+    resd 1        ;bytes per pixel
