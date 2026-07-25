@@ -3,6 +3,7 @@
 ;Copyright (C) 2026 Technodon
 ;=====================================================================
 
+;Buffers for network card and for ip.obj are always 0x3000 bytes wide
 section .text
 start:
     jmp short init
@@ -86,6 +87,19 @@ init:
     mov ebx, 0x37
     call write8
 
+    mov ah, 0x0a
+    mov ecx, 0x3000
+    int 0x35
+
+    mov [destination_buffer_addr], esi
+    mov [current_buffer_addr], esi
+    mov [copy_addr], esi
+
+    mov edi, esi
+    xor eax, eax
+    mov ecx, 0x3000/4
+    rep stosd
+
     ;read MAC address
     xor ebx, ebx
     call read8
@@ -111,11 +125,20 @@ init:
     call read8
     mov [mac_addr+5], al
 
-    call get_ip_addr
+    ;call get_ip_addr
+
+    mov edi, kernel_packet+32
+    mov esi, mac_addr
+    mov ecx, 6
+    rep movsb
 
     mov edx, kernel_packet
     mov edi, interrupt_handler
     mov [edx+4], edi
+    mov edi, transmit_packet
+    mov [edx], edi
+    mov edi, packet_size
+    mov [edx+42], edi
     ret
 
 
@@ -267,8 +290,6 @@ transmit_packet:
     cmp eax, 1792
     ja .error
 
-    ;call get_mac_addr
-
     movzx ebx, byte [current_tx]
     imul ebx, REG_OFFSET
     add ebx, TX_REG_START
@@ -293,10 +314,12 @@ transmit_packet:
 
 .skip:
     popa
+    sti
     clc
     ret
 .error:
     popa
+    sti
     stc
     ret
 
@@ -345,72 +368,20 @@ get_mac_addr:
     popa
     ret
 
-get_ip_addr:
-    ;ask router for our IP address
-
-    push esi
-    push edi
-    push eax
-
-    mov esi, get_ip_packet
-
-    mov al, [mac_addr]
-    mov [esi+6], al
-    mov al, [mac_addr+1]
-    mov [esi+7], al
-    mov al, [mac_addr+2]
-    mov [esi+8], al
-    mov al, [mac_addr+3]
-    mov [esi+9], al
-    mov al, [mac_addr+4]
-    mov [esi+10], al
-    mov al, [mac_addr+5]
-    mov [esi+11], al
-
-    mov al, [mac_addr]
-    mov [esi+70], al
-    mov al, [mac_addr+1]
-    mov [esi+71], al
-    mov al, [mac_addr+2]
-    mov [esi+72], al
-    mov al, [mac_addr+3]
-    mov [esi+73], al
-    mov al, [mac_addr+4]
-    mov [esi+74], al
-    mov al, [mac_addr+5]
-    mov [esi+75], al
-
-    push esi
-    add esi, 14
-    mov ecx, 10
-    call compute_rfc1071_checksum
-    pop esi
-    mov [esi+24], ax
-
-    mov edi, esi
-    mov eax, 286
-    call transmit_packet
-
-    pop eax
-    pop edi
-    pop esi
-    ret
-
 ;############################## INTERRUPT HANDLER ##############################
 interrupt_handler:
     pusha
-    mov ebx, 0x3c
+    mov ebx, 0x3e
     call read16
     test ax, ax
     jz .done    ;shared IRQ
 
-    push ax
+
 
     test ax, (1 << 0)
     jz .packet_received_err
 
     call handle_received_packet
-
 .packet_received_err:
     test ax, (1 << 1)
     jz .transmit_ok
@@ -427,7 +398,7 @@ interrupt_handler:
     test ax, (1 << 3)
     jz .buffer_overflow
 
-call handle_transmit_error
+    call handle_transmit_error
 
 .buffer_overflow:
     test ax, (1 << 4)
@@ -436,9 +407,8 @@ call handle_transmit_error
     call handle_buffer_overflow
 
 .done:
-    pop ax
 
-    mov ebx, 0x3c
+    mov ebx, 0x3e
     call write16
     popa
     ret
@@ -454,9 +424,12 @@ handle_received_packet:
     mov edi, [buffer_addr]
     add edi, edx
 
-    ; cli
-    ; hlt
-    ;copy buffer into ram...
+    mov byte [snd], 1
+
+    mov esi, edi
+    add esi, 4      ;skip status bits and buffer size
+    movzx ecx, word [edi+2]
+    call copy_buffer
 
     movzx ecx, word [edi+2]
     add edx, ecx
@@ -478,9 +451,10 @@ handle_received_packet:
     call write16
     pop eax
 
+
     inc dword [receive_success_count]
     mov edx, [receive_success_count]
-    mov edi, [kernel_packet]
+    mov edi, kernel_packet
     mov [edi+24], edx
 
     ret
@@ -512,7 +486,7 @@ handle_receive_err:
 
     inc dword [receive_error_count]
     mov edx, [receive_error_count]
-    mov edi, [kernel_packet]
+    mov edi, kernel_packet
     mov [edi+20], edx
     ret
 
@@ -616,37 +590,45 @@ change_mac:
     clc
     ret
 
-compute_rfc1071_checksum:
-    ;ESI = pointer to IP-Header (offset 14)
-    ;ECX = length to compute (in words)
-    ;Output of Checksum in AX
+copy_buffer:
+    ;ESI = pointer to packet
+    ;ECX = size of packet in bytes
+    pusha
+
+    mov [packet_size], cx
+    mov edi, [current_buffer_addr]
+    cmp edi, dword [copy_addr]
+    jne .wait
+
+.copy:
     push ecx
-    push edx
-
-    xor eax, eax
-
-.loop:
-    movzx edx, word [esi]
-    xchg dl, dh
-    add eax, edx
-    add esi, 2
-    dec ecx
-    jnz .loop
-
-.check_carry:
-    mov edx, eax
-    shr edx, 16
-    and eax, 0xffff
-    add eax, edx
-    cmp eax, 0xffff
-    ja .check_carry
-
-    not ax      ;invert bits
-    xchg al, ah
-
-    pop edx
+    rep movsb
     pop ecx
+
+    mov eax, [destination_buffer_addr]
+    add eax, 0x2000
+
+    add ecx, dword [current_buffer_addr]
+    mov [current_buffer_addr], ecx
+
+    cmp ecx, eax
+    jb .skip
+
+    mov eax, [destination_buffer_addr]
+    mov dword [current_buffer_addr], eax
+
+.skip:
+    popa
     ret
+
+
+.wait:
+    hlt
+    cmp edi, dword [copy_addr]
+    jne .wait
+
+    jmp .copy
+
 
 section .data
 mmio: db 0      ;0 = card uses IO ports, 1 = card uses MMIO
@@ -659,12 +641,15 @@ REG_OFFSET      equ 4
 current_tx: db 0
 TX_REG_STATUS   equ 0x10
 TX_REG_START    equ 0x20
+destination_buffer_addr: dd 0
+current_buffer_addr: dd 0
+packet_size: dw 0
 
 kernel_packet:
     dd 0        ;transmit_packet()
     dd 0        ;interrupt handler()
 
-    dd 0        ;IPv4 address
+    dd 0
 
     dd 0        ;transmit_error_count
     dd 0        ;transmit_success_count
@@ -672,62 +657,21 @@ kernel_packet:
     dd 0        ;receive_error_count
     dd 0        ;receive_success_count
 
+    dd 0        ;buffer address
+    times 3 dw 0    ;mac address
+
+    copy_addr: dd 0
+    dd 0        ;packet_size
+
 transmit_error_count: dd 0
 transmit_success_count: dd 0
 receive_error_count: dd 0
 receive_success_count: dd 0
 carp_offset: dw 0
 
+snd: db 0
+
 mac_addr:
     dd 0
     dw 0
 ip_addr: dd 0
-
-get_ip_packet:
-    ;ethernet header
-    dd 0xffffffff   ;destination MAC address (broadcast)
-    dw 0xffff
-    dw 0, 0, 0      ;source MAC
-    dw 0x0008       ;EtherType: IPv4
-
-    ;IPv4 header
-    db 0x45         ;IPv4, header-length 20 bytes
-    db 0
-    dw 0x1001       ;little endian: 0x128 (total packet length)
-    dw 0x1234       ;ID
-    dw 0            ;no fragmentation
-    db 0x80         ;times to live
-    db 0x11         ;protocol: UDP
-    dw 0            ;header checksum
-    dd 0            ;source IP
-    dd 0xffffffff   ;destination IP
-
-    ;UDP header
-    db 0, 68    ;source port
-    db 0, 67    ;destination port
-    dw 0xfc00   ;length
-    dw 0        ;checksum
-
-    db 1    ;message type: boot request
-    db 1    ;hardware type: ethernet
-    db 6    ;hardware address length: 6
-    db 0
-    dd 0x77777777   ;transaction ID
-    dw 0
-    dw 0x0080       ;flags: broadcast
-    dd 0            ;client IP (CIADDR)
-    dd 0            ;your IP (YIADDR)
-    dd 0            ;next server IP (SIADDR)
-    dd 0            ;relay Agent IP (GIADDR)
-
-    times 6 db 0    ;client MAC address
-    times 10 db 0   ;padding
-
-    times 64 db 0   ;server host name
-    times 128 db 0  ;boot file name
-    dd 0x63825363   ;magic cookie
-
-    db 53           ;option 53
-    db 1            ;length 1
-    db 1
-    db 0xff         ;end of packet
