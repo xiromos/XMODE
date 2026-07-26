@@ -276,7 +276,7 @@ main:
     mov ebx, init_system
     mov esi, program_init_sys
     mov ah, 0x13
-    ;int 0x35
+    int 0x35
     
     mov al, 0x20
     call print_char
@@ -870,6 +870,10 @@ scan_disk_pci:
     call read_bar0
     ;and eax, 0xfffffffe
     mov [rtl8139_base], eax          ;bit 1 = 1: IO-Port, bit 1 = 0: MMIO
+    ; mov ebx, 0x1000
+    ; xor ecx, ecx
+    ; or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS
+    ; call map_region
 
     mov eax, ecx
     add eax, 0x04
@@ -1231,6 +1235,11 @@ load_drivers:
     cmp byte [rtl8139_found], 1
     je .found_rtl8139
 
+    cmp byte [net_card_found], 1
+    jne .skip_net
+
+    call load_network_stack
+.skip_net:
     ret
 ;######################################################################################
 ;################################ OHCI CONTROLLER #####################################
@@ -1378,10 +1387,27 @@ load_drivers:
     mov eax, [rtl8139_base]
     call edi
 
+    push edx
     mov eax, [edx+4]
     movzx ebx, byte [rtl8139_irq]
     call set_irq
+    pop edx
 
+    mov eax, [edx]
+    mov [ip_packet], eax
+    mov eax, edx
+    add eax, 38
+    mov [ip_packet+4], eax
+    mov eax, [edx+42]
+    mov [ip_packet+14], eax
+
+    mov edi, ip_packet+8
+    mov esi, edx
+    add esi, 32
+    mov ecx, 6
+    rep movsb
+
+    mov byte [net_card_found], 1
 .skip_rtl8139:
     mov byte [rtl8139_found], 0
     jmp .loop
@@ -1439,6 +1465,7 @@ load_driver_file:
 
     mov ah, 0x0a
     int 0x35
+    jc .low_mem
 
     mov [.heap], esi
     mov [.size], ecx
@@ -1466,9 +1493,147 @@ load_driver_file:
 
     stc
     ret
-
+.low_mem:
+    mov esi, .low_mem_str
+    mov ebx, COLOR_RED
+    call print_string
+    stc
+    ret
 .heap: dd 0
 .size: dd 0
+.low_mem_str: db 'Couldnt find free memory to load driver. The system seems to be low on memory', 0x0a, 0
+
+
+;######################################################################################
+;################## LOAD NETWORK STACK FROM NETWORK DIRECTORY #########################
+;######################################################################################
+load_network_stack:
+    pusha
+    xor eax, eax
+    mov edi, NET_INTERFACE
+    mov ecx, 25
+    rep stosd
+
+    mov ecx, 0x1000
+    mov ah, 0x0a
+    int 0x35
+
+    mov [.heap], esi
+    mov edi, esi
+    mov esi, dir_network_str
+    xor edx, edx
+    mov ah, 0x0a
+    mov bl, [drive_number]
+    int 0x33
+    jc .error
+
+    ;load and execute IP.OBJ first time
+    xor ah, ah
+    mov esi, file_ip_sys
+    int 0x33
+    jc .error
+
+    mov ah, 0x0a
+    int 0x35
+    jc .low_memory
+
+    mov edx, [.heap]
+    mov edi, esi
+    mov esi, file_ip_sys
+    mov bl, [drive_number]
+    mov ah, 0x0a
+    int 0x33
+    jc .error
+
+    call load_coff_obj
+    mov [.ipobj_addr], edi
+
+    mov eax, ip_packet
+    call edi
+
+    mov edi, NET_INTERFACE
+    mov [edi+16], edx       ;store pointer to function add_ipheader()
+
+    ;load and execute PROTOCOL.OBJ first time
+    xor ah, ah
+    mov edi, [.heap]
+    mov esi, file_protocol_sys
+    int 0x33
+    jc .error
+
+    mov ah, 0x0a
+    int 0x35
+    jc .low_memory
+
+    mov edx, [.heap]
+    mov edi, esi
+    mov esi, file_protocol_sys
+    mov bl, [drive_number]
+    mov ah, 0x0a
+    int 0x33
+    jc .error
+
+    call load_coff_obj
+    mov [.protocolobj_addr], edi
+
+    ;mov eax, ip_packet
+    call edi
+
+    mov edi, NET_INTERFACE
+    mov dword [edi+56], application_packet
+    add edi, 20
+    mov ecx, 4
+.loop1:
+    mov eax, [edx]
+    mov [edi], eax
+    add edx, 4
+    add edi, 4
+    dec ecx
+    jnz .loop1
+
+    add edi, 4
+    mov ecx, 4
+.loop2:
+    mov eax, [edx]
+    mov [edi], eax
+    add edx, 4
+    add edi, 4
+    dec ecx
+    jnz .loop2
+
+    ;execute IP.OBJ second time
+    mov ebx, NET_INTERFACE
+    call dword [.ipobj_addr]
+
+    ;execute PROTOCOL.OBJ second time
+    mov ebx, NET_INTERFACE
+    call dword [.protocolobj_addr]
+    mov byte [net_active], 1
+    popa
+    clc
+    ret
+
+.heap: dd 0
+.ipobj_addr: dd 0
+.protocolobj_addr: dd 0
+
+.error:
+    mov esi, .error_msg
+    mov ebx, COLOR_RED
+    call print_string
+    mov byte [net_active], 0
+    popa
+    stc
+    ret
+.low_memory:
+    mov esi, load_driver_file.low_mem_str
+    mov ebx, COLOR_RED
+    call print_string
+    mov byte [net_active], 0
+    popa
+    ret
+.error_msg: db 'Error loading network files. Network unavailable', 0x0a, 0
+
 %include "data/data.asm"
 %include "data/font.asm"
 %include "kernel/stdfunc.asm"
@@ -1490,8 +1655,8 @@ intel_audiodev_base: dd 0           ;MMIO Base Address
 rtl8139_found: db 0
 rtl8139_base: dd 0
 rtl8139_irq: db 0
-
-PIT_DIVISOR     equ 0xe90b
+net_card_found: db 0
+PIT_DIVISOR     equ 0x2e9c          ;10ms 
 ;memory map
 ;0x0000 - 0x4000:      root directory
 ;0x4000 - 0x7c00:      FAT
