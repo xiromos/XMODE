@@ -135,11 +135,6 @@ exec_cmd:
     jc show_pci
 
     mov edi, command_buffer
-    mov esi, ahci_str
-    call cmp_str
-    jc .ahci
-
-    mov edi, command_buffer
     mov esi, lsdisk_str
     call cmp_str
     jc list_drives
@@ -174,11 +169,55 @@ exec_cmd:
     call cmp_str
     jc show_memory_info
 
+    mov edi, command_buffer
+    mov esi, reboot_str
+    call cmp_str
+    jc .reboot_system
+
+    mov edi, command_buffer
+    mov esi, dhcp_str
+    call cmp_str
+    jc .init_dhcp
+
     jmp .exec_program
     ret
-.ahci:
-    call ahci_init
+.reboot_system:
+    xor ah, ah
+    mov bh, 0x02
+    int 0x35
+
     ret
+.init_dhcp:
+    cmp byte [.dhcp], 1
+    je .dhcp_error
+
+    mov ah, 0x03
+    mov ebx, [load_network_stack.heap]
+    mov esi, file_dhcp_sys
+    mov edi, file_dhcp_sys
+    int 0x35
+
+    mov ah, 0x0b
+    mov ecx, 0x1000
+    mov esi, [load_network_stack.heap]
+    int 0x35
+
+; .wait_ip:
+;     mov edi, NET_INTERFACE
+;     mov eax, [edi]
+;     cmp eax, 0
+;     je .wait_ip
+
+    mov byte [.dhcp], 1
+    ret
+
+.dhcp_error:
+    mov esi, .dhcp_error_str
+    mov ebx, COLOR_RED
+    call print_string
+    ret
+.dhcp: db 0
+.dhcp_error_str: db 'Error: DHCP Request already sent', 0x0a, 0
 .osdev_dc:
     mov esi, osdev_discord_msg
     mov ebx, 0x00ffffff
@@ -1092,6 +1131,13 @@ show_tasks:
     lodsb
     mov ebx, 0x00ffffff
     call print_char
+
+    cmp cx, 4
+    jne .skip1
+
+    mov al, '.'
+    call print_char
+.skip1:
     dec cx
     jnz .print_loop
     pop eax
