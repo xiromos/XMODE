@@ -1,6 +1,8 @@
 ;=========================================================
 ;System API
-;AH = 0x00: get system information                                                                      ;EDI = pointer to 128B buffer
+;AH = 0x00:
+;   BH = 0x01: get system information                                                                      ;EDI = pointer to 128B buffer
+;   BH = 0x02: reboot system
 ;AH = 0x01: Freeze System (debug)
 ;AH = 0x02: start a foreground task (that means the task has control over keyboard and screen)          ;EBX = pointer to directory, ESI = pointer to taskname, EDI = pointer to filename       Output: CF on Error, AH = Error code (0x00 = fs error, 0x01 = COFF error)
 ;AH = 0x03: start a background task                                                                     ;EBX = pointer to directory, ESI = pointer to taskname, EDI = pointer to filename       Output: CF on Error, AH = Error code (0x00 = fs error, 0x01 = COFF error)
@@ -8,6 +10,8 @@
 ;   Error ist set if the PID is 0 or 1 or if the task is a kernel task
 ;AH = 0x05: terminate the process which called the syscall
 ;AH = 0x06: terminate the caller process but skip the part where freeing the tasks heap
+;AH = 0x07: change task state
+;   AL = 0x01: task state = sleeping
 ;AH = 0x0A: allocate heap                                                                               ;Input: ECX = size         Output: ESI = pointer to heap chunk
 ;AH = 0x0B: free heap                                                                                   ;Input: ESI = pointer to allocated chunk, ECX = size
 
@@ -20,13 +24,22 @@
 ;   BH = 0x03: resume playing current WAV file
 ;   BH = 0x04: stop playing WAV file
 ;AH = 0x21: network functions
-;   BH = 0x01: get network stats
+;   AL = 0x01: get network stats
 ;       Input: EDI = pointer to 128B buffer
 ;       Output: filled buffer
-
+;   AL = 0x02: open socket
+;       Input: BH = net_interface (0 = IPv4, 1 = IPv6), BL = protocol (0x01 ICMP, 0x02 TCP, 0x03 UDP), DX = port number (if zero then let the OS decide) ESI = buffer address for packets
+;       Output: socket number in CX or CF if port number is already used
+;   AL = 0x03: send a packet
+;       Input: bit 16-31 of EBX = socket number, BX = port (zero if programs uses ICMP), EDX = IPv4 address (big endian), ESI = pointer to packet, ECX = length of packet
+;   AL = 0x04: wait for packet
+;       Input: CX = socket number
+;       If returns, that means a packet was received. The program itself has to check if its the right packet.
+;   AL = 0x05: close socket
+;       Input: CL = socket number
 program_sys_handler:
     cmp ah, 0x00
-    je get_system_info
+    je general_system
     cmp ah, 0x01
     je .test_stop
     cmp ah, 0x02
@@ -39,6 +52,8 @@ program_sys_handler:
     je .terminate_process
     cmp ah, 0x06
     je .terminate_process
+    cmp ah, 0x07
+    je change_task_state
     cmp ah, 0x0a
     je alloc_heap
     cmp ah, 0x0b
@@ -53,6 +68,8 @@ program_sys_handler:
     je start_task_bg2
     cmp ah, 0x20
     je play_wav_file
+    cmp ah, 0x21
+    je network_functions
 
     or dword [esp+8], 1
     iret
@@ -393,7 +410,25 @@ kill_task:
     iret
 
 
+change_task_state:
+    cli
+    pusha
+    cmp al, 0x01
+    je .sleep
+    cmp al, 0x02
 
+    popa
+    or dword [esp+8], 1
+    iret
+.sleep:
+    movzx ecx, word [current_task]
+    imul ecx, TASK_SIZE
+    add ecx, tasks_esp
+    mov dword [ecx+11], 0x0000b100  ;sleeping
+.done:
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
 ;#################################################################
 ;#################### ALLOCATE AND FREE PAGES ####################
 ;#################################################################
@@ -957,5 +992,285 @@ play_wav_file:
     iret
 
 
-get_system_info:
+general_system:
+    pusha
+
+    cmp bh, 0x01
+    je .get_sys_info
+    cmp bh, 0x02
+    je .reboot
+
+    popa
+    or dword [esp+8], 1
     iret
+.reboot:
+    mov eax, cr0
+    and eax, 0xfffffffe
+    mov cr0, eax
+
+[bits 16]
+    jmp far 0xffff:0x0000
+
+[bits 32]
+.get_sys_info:
+
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+
+
+network_functions:
+    pusha
+
+    cmp byte [net_active], 1
+    jne .no_network
+
+    cmp al, 0x01
+    je .get_information
+    cmp al, 0x02
+    je .open_socket
+    cmp al, 0x03
+    je .send_packet
+    cmp al, 0x04
+    je .wait_packet
+    cmp al, 0x05
+    je .close_socket
+
+    popa
+    or dword [esp+8], 1
+    iret
+
+.get_information:
+    jmp .done
+.open_socket:
+    cmp bl, 0x03
+    ja .error
+    cmp bh, 0
+    jne .error      ;IPv6 yet no supported
+
+    mov edi, socket_list
+    xor ecx, ecx
+.loop:
+    cmp word [edi], 0
+    je .found_free
+
+    inc ecx
+    add edi, SOCKET_ENTRY_SIZE
+    cmp ecx, 5
+    jae .error
+    jmp .loop
+
+.found_free:
+    mov ax, [current_task]
+    mov [edi], ax       ;set PID field
+
+    mov [edi+2], bl
+    mov [edi+3], bh
+
+    mov word [edi+4], 0
+    mov [edi+6], esi    ;set buffer address
+
+    mov ebp, ecx
+
+    cmp bl, 0x02
+    jbe .skip_port  ;ICMP and ARP doesnt use ports
+
+    cmp dx, 0
+    jne .custom_port
+
+    mov edi, socket_list
+    mov ecx, MAX_SOCKETS
+    mov ax, 50000
+.loop2:
+    cmp word [edi+4], ax
+    je .reset
+
+    add edi, SOCKET_ENTRY_SIZE
+    dec ecx
+    jnz .loop2
+    
+    mov edi, edx
+    imul edi, SOCKET_ENTRY_SIZE
+    add edi, socket_list
+    mov [edi+4], ax
+
+.skip_port:
+
+    mov [.tmp16], bp
+    popa
+
+    mov cx, [.tmp16]
+    and dword [esp+8], 0xfffffffe
+    iret
+
+.reset:
+    inc ax
+    cmp ax, 50007
+    ja .error
+
+    mov edi, socket_list
+    mov ecx, MAX_SOCKETS
+    jmp .loop2
+
+.done:
+    popa
+    and dword [esp+8], 0xfffffffe
+    iret
+.error:
+    popa
+    or dword [esp+8], 1
+    iret
+.tmp16: dw 0
+.custom_port:
+    mov [edi+4], dx
+    jmp .skip_port
+
+.close_socket:
+    movzx edi, cl
+    imul edi, SOCKET_ENTRY_SIZE
+    add edi, socket_list
+
+    mov ax, [current_task]
+    cmp ax, [edi]
+    jne .error      ;not our PID
+
+    mov ecx, SOCKET_ENTRY_SIZE
+    xor al, al
+    rep stosb
+
+    jmp .done
+
+
+.send_packet:
+    push ebx
+    shr ebx, 16
+    mov bp, bx
+    pop ebx
+
+    cmp bp, 0
+    je .error
+    cmp ecx, 0
+    je .error
+
+    movzx edi, bp
+    imul edi, SOCKET_ENTRY_SIZE
+    add edi, socket_list
+
+    mov al, [edi+2]
+    cmp al, 0x01
+    je .send_icmp
+    cmp al, 0x02
+    je .send_tcp
+    cmp al, 0x03
+    je .send_udp
+
+    jmp .error
+.send_icmp:
+    jmp .done
+.send_tcp:
+    jmp .done
+.send_udp:
+    ;EAX (bit 16-31): destination port
+    ;EAX (bit 0-15): source port
+    ;ECX = length of packet
+    ;EDX = IPv4 address
+    ;ESI = pointer to packet
+    mov ax, bx  ;destination port number
+    shl eax, 16
+    mov ax, [edi+4]
+    mov edi, NET_INTERFACE
+    call dword [edi+20]     ;add_udp_header()
+
+    jmp .done
+
+.wait_packet:
+    ;CX = socket number
+    movzx edi, cx
+    imul edi, SOCKET_ENTRY_SIZE
+    add edi, socket_list
+    test byte [edi+3], (1 << 7)
+    jnz .packet_received
+
+    int 0x20
+    jmp .wait_packet
+
+.packet_received:
+    and byte [edi+3], ~(1 << 7)
+    jmp .done
+
+.no_network:
+    popa
+    or dword [esp+8], 1
+    mov eax, 0xffffffff
+    mov ebx, eax
+    mov ecx, eax
+    mov edx, eax
+    mov esi, eax
+    mov edi, eax
+    iret
+
+application_packet:
+    ;ESI = pointer to packet
+    ;ECX = size
+    ;AX = destination port (port of program, which waits for the packet) (big endian)
+    ;BX = source port (from sender) (big endian)
+    ;EDX = source IPv4 address (from sender) (big endian)
+    ;copy packet into program packet buffer
+    push ecx
+    mov edi, socket_list
+    mov ecx, MAX_SOCKETS
+    xchg al, ah     ;convert from Big Endian to Little Endian
+.loop:
+    cmp [edi+4], ax
+    je .found_socket
+
+    add edi, SOCKET_ENTRY_SIZE
+    dec ecx
+    jnz .loop
+
+    pop ecx
+    stc
+    ret
+.found_socket:
+    mov ebp, edi
+
+    mov edi, [edi+6]
+    mov [edi], edx      ;big endian IPv4
+    mov [edi+4], bx     ;big endian port
+    pop ecx
+    mov [edi+6], cx
+    mov dword [edi+8], 0
+    add edi, 12
+    rep movsb
+
+    or dword [ebp+3], (1 << 7)  ;packet received
+
+    ret
+
+;----data----
+socket_list:
+    ;limited to 5 available sockets
+
+    ;reserved socket
+    dw 0xff ;PID
+    db 0    ;protocol (0x01 ICMP, 0x02 ARP, 0x03 UDP)
+    db 0    ;IPv4 / IPv6, bit 7: 1 = packet received, 0 = no current packet
+    dw 50000    ;port number
+    dd 0    ;buffer address
+    dw 0    ;options
+
+    db 12 dup(0)
+    db 12 dup(0)
+    db 12 dup(0)
+    db 12 dup(0)
+    db 12 dup(0)
+
+SOCKET_ENTRY_SIZE   equ 12
+MAX_SOCKETS         equ 6
+
+; If program gets a packet copied in its buffer, it has a following header:
+; struc packet_header:
+;     dd source_ip      ;IPv4 address which sent the packet (big endian)
+;     dw source_port    ;port, from where the packet came (big endian)
+;     dw payload_length ;length of user data
+;     dd packet_next    ;pointer to next packet if packets are fragmented (not implemented yet)
