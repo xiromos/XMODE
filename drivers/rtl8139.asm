@@ -125,6 +125,8 @@ init:
     call read8
     mov [mac_addr+5], al
 
+    mov esi, mac_addr
+
     ;call get_ip_addr
 
     mov edi, kernel_packet+32
@@ -139,6 +141,15 @@ init:
     mov [edx], edi
     mov edi, packet_size
     mov [edx+42], edi
+
+    mov edi, transmit_error_count
+    mov [edx+12], edi
+    mov edi, transmit_success_count
+    mov [edx+16], edi
+    mov edi, receive_error_count
+    mov [edx+20], edi
+    mov edi, receive_success_count
+    mov [edx+24], edi
     ret
 
 
@@ -290,6 +301,15 @@ transmit_packet:
     cmp eax, 1792
     ja .error
 
+    mov ecx, eax
+
+    mov ebx, 0x58
+    call read8
+    test al, (1 << 2)       ;link bad (bit 2) is set, that means there is no physical ethernet cabel connection
+    jnz .error
+
+    mov eax, ecx
+
     movzx ebx, byte [current_tx]
     imul ebx, REG_OFFSET
     add ebx, TX_REG_START
@@ -423,8 +443,6 @@ handle_received_packet:
     movzx edx, ax
     mov edi, [buffer_addr]
     add edi, edx
-
-    mov byte [snd], 1
 
     mov esi, edi
     add esi, 4      ;skip status bits and buffer size
