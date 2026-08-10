@@ -149,9 +149,12 @@ int0xe:
     mov al, 0xff
     mov edi, [frame_buffer]
     rep stosb
+
+    mov esi, .error_msg
     call rsod
     cli
     hlt
+.error_msg: db 'Page Access Violation By Task SHELL.SYS', 0
 int_no_err:
     pusha
     mov ebx, [cur_x]
@@ -243,6 +246,7 @@ irq0_handler:
     jmp .search_loop
 .load_shell:
     mov ax, 1
+    mov edi, tasks_esp+TASK_SIZE    ;EDI points to shell task
 
 .load_next:
     ;check attributes
@@ -279,8 +283,10 @@ irq0_handler:
 .check_attributes:
     mov bx, ax
     inc bx
-    cmp dword [edi+11], 0x0000df00
+    cmp dword [edi+11], 0x0000df00      ;waiting for ATA hard disk
     je .search_loop     ;skip this task
+    cmp dword [edi+11], 0x0000b100      ;sleeping
+    je .search_loop
 
     ;unknown attribute
     jmp .continue
@@ -577,6 +583,7 @@ switch_tasks:
     mov ah, 0x02
     mov edi, switch_tasks_window
     int 0x34
+    sti
 
     mov dword [edi+16], width / 2-250
     mov dword [edi+20], height / 2-150
@@ -592,6 +599,7 @@ switch_tasks:
     mov ah, 0x02
     mov edi, switch_tasks_window
     int 0x34
+    sti
 
     mov dword [edi+16], width / 2-250
     mov dword [edi+20], height / 2-150
@@ -831,7 +839,7 @@ ohci_interrupt_handler:
     ; pop ecx
     ; pop edi
     ; pop esi
-    ; je .skip_keyboard       ;skip same keyreport
+    ; je .done       ;skip same keyreport
 
     mov al, [esi]
     add esi, 2
@@ -985,5 +993,62 @@ irq9_list: times 4 dd 0
 irq10_list: times 4 dd 0
 irq11_list: times 4 dd 0
 
+;IRQ 8 handler
+rtc_handler:
+    cli
+    pusha
+
+    inc dword [system_tick]
+    call check_timers
+
+    mov dx, 0x70
+    mov al, 0x0c
+    out dx, al
+
+    nop
+    nop
+
+    mov dx, 0x71
+    in al, dx
+
+    mov al, 0x20
+    out 0x20, al
+    out 0xa0, al
+    popa
+    iret
+
 rsod:
+    ;ESI = pointer to reason message
+    cli
+    mov edi, [frame_buffer]
+    mov eax, COLOR_RED
+    mov ecx, [real_width]
+    imul ecx, dword [real_height]
+    movzx ebx, byte [bpp]
+.loop:
+    mov [edi], eax
+    add edi, ebx
+    dec ecx
+    jnz .loop
+
+    mov dword [cur_x], 0
+    mov dword [cur_y], 0
+
+    push esi
+    mov esi, .error_msg
+    mov ebx, 0x00ffffff
+    call print_string
+    pop esi
+
+    mov ebx, 0x00ffffff
+    call print_string
+
+    ;call reboot
+    cli
+    hlt
     ret
+
+
+.error_msg: db ':(', 0x0a,
+            db 'Sorry, an critical error occured', 0x0a,
+            db 'Reason: ',
