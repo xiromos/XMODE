@@ -123,6 +123,7 @@ output_handler:
     pop eax
     add al, '0'
     mov ebx, 0x00ffffff
+    mov [color], ebx
     call print_char
     loop .print_loop
     popa
