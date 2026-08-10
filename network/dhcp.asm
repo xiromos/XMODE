@@ -17,6 +17,7 @@ start:
     mov bl, 3       ;UDP
     mov dx, 68
     int 0x35
+    jc error
 
 .dora:
     movzx ebx, cx
@@ -50,6 +51,8 @@ start:
     mov [esi+4], edx
     mov edx, [gateway]
     mov [esi+8], edx
+    mov edx, [subnet_mask]
+    mov [esi+60], edx
 
     call print_configs
     pop cx
@@ -66,7 +69,7 @@ start:
     mov edx, 0xffffffff
 
     mov esi, ip_packet
-    mov dword [esi+4], 'RQST'   ;xid
+    mov dword [esi+4], 'DHCP'   ;xid
     mov byte [esi+236], 99
     mov byte [esi+237], 130
     mov byte [esi+238], 83
@@ -342,7 +345,7 @@ check_packet2:
     mov esi, [heap]
     add esi, 12
 
-    cmp dword [esi+4], 'RQST'
+    cmp dword [esi+4], 'DHCP'
     jne .error
 
     add esi, 236+4
@@ -392,6 +395,15 @@ swap:
     mov eax, ebx
     pop ebx
     ret
+error:
+    mov esi, internet_err
+    mov ebx, 0xe30909
+    mov ah, 0x01
+    int 0x30
+
+    mov ah, 0x05
+    int 0x35
+
 section .data
 heap: dd 0
 
@@ -441,3 +453,5 @@ h: db 'h', 0
 
 router_port: dw 0
 router_ip: dd 0
+
+internet_err: db 'Error: No Internet Connection', 0x0a, 0

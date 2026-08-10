@@ -187,6 +187,8 @@ process_packet:
 .tcp_packet:
     jmp .done_ipv4
 .ping:
+    mov edx, [edi+12]
+    call dword [process_packet_icmp]
     jmp .done_ipv4
 
 
@@ -196,9 +198,12 @@ process_packet:
 
     mov ebx, [edi+38]
     cmp eax, ebx
-    jne .skip
+    jne .done
 
     mov ebx, [edi+28]   ;IPv4 address of sender
+
+    cmp word [edi+20], 0x0100
+    je .check_reply
 
     mov esi, edi
     add esi, 22
@@ -220,7 +225,31 @@ process_packet:
 .skip:
     mov [mac_buffer_off], ecx
     jmp .done
+.check_reply:
+    mov esi, arp_reply_packet
+    mov [esi+28], eax   ;set our own IP
+    mov [esi+38], ebx   ;set destination IP
 
+    ;set destination MAC
+    mov eax, [edi+6]
+    mov [esi+32], eax
+    mov [esi], eax
+    mov ax, [edi+10]
+    mov [esi+36], ax
+    mov [esi+4], ax
+
+    ;set our own MAC
+    mov ebx, [mac_addr]
+    mov [esi+6], ebx
+    mov [esi+22], ebx
+    mov bx, [mac_addr+4]
+    mov [esi+10], bx
+    mov [esi+26], bx
+
+    mov edi, arp_reply_packet
+    mov eax, ARP_PACKET_SIZE
+    call dword [transmit_packet]
+    jmp .done
 
 compute_rfc1071_checksum:
     ;ESI = pointer to IP-Header (offset 14)
@@ -275,12 +304,17 @@ add_ipheader:
     ;AL = protocol
     ;BX = header size
 
+    ;mov [test1], al
     mov [header_size], bx
     ;IPv4 header
     mov byte [esi+14], 0x45
     mov byte [esi+15], 0
     mov ebx, ecx
-    add ebx, 28     ;packet length with UDP header + IPv4 header
+
+    add ebx, 20     ;packet length with header + IPv4 header
+    movzx ebp, word [header_size]
+    add ebx, ebp
+
     xchg bl, bh
     mov [esi+16], bx
     
@@ -306,6 +340,25 @@ add_ipheader:
     cmp edx, 0xffffffff     ;check if IP is broadcast
     je .skip_mac
 
+    ;check if IP is out of network
+    push edi
+    push ecx
+
+    mov edi, [net_interface]
+    mov ebp, [edi+60]   ;get subnet mask
+    mov eax, edx
+    and eax, ebp
+
+    mov ecx, [edi+4]    ;get gateway IP
+    and ecx, ebp
+
+    cmp eax, ecx
+
+    pop ecx
+    pop edi
+    jne .global_net
+
+    ;get MAC address of IPv4 address
     push eax
     push ebx
 
@@ -347,12 +400,36 @@ add_ipheader:
     movzx ebx, word [header_size]
     add eax, 20+14
     add eax, ebx
+
+;     cmp byte [test1], 1
+;     jne .skip1
+ 
+;     cli
+;     hlt
+; .skip1:
+
     call dword [transmit_packet]
+    jc .error
 
     clc
     ret
 
+.global_net:
+    push edi
+    mov edi, [net_interface]
+    mov edx, [edi+8]
 
+    call get_mac_addr
+
+    mov [esi], eax
+    mov [esi+4], bx
+
+    pop edi
+    jmp .skip_mac
+
+.error:
+    stc
+    ret
 
 get_mac_addr:
     ;get MAC address of IP using ARP
@@ -368,6 +445,20 @@ get_mac_addr:
     push esi
     push ecx
 
+    mov esi, [mac_buffer]
+    mov ecx, MAC_BUFFER_ENTRIES
+.loop:
+    cmp dword [esi], edx
+    je .found_mac
+
+    cmp dword [esi], 0
+    je .skip
+
+    add esi, MAC_BUFFER_ENTRY
+    dec ecx
+    jnz .loop
+
+.skip:
     mov edi, arp_packet
     mov [edi+38], edx
     mov esi, mac_addr
@@ -413,7 +504,14 @@ get_mac_addr:
     pop esi
     pop edi
     ret
+.found_mac:
+    mov eax, [esi+4]
+    movzx ebx, word [esi+8]
 
+    pop ecx
+    pop esi
+    pop edi
+    ret
 section .data
 run: db 0
 transmit_packet: dd 0
@@ -452,6 +550,23 @@ arp_packet:
     dd 0            ;destination IPv4 address
 ARP_PACKET_SIZE     equ 42
 
+arp_reply_packet:
+    times 3 dw 0
+    times 3 dw 0
+    dw 0x0608
+
+    dw 0x0100
+    dw 0x0008
+    db 6
+    db 4
+    dw 0x0200
+
+    times 3 dw 0    ;own MAC
+    dd 0            ;own IP
+
+    times 3 dw 0    ;destination MAC
+    dd 0            ;destination IP
+
 arp_received:
     db 0
     dd 0
@@ -463,3 +578,5 @@ mac_buffer: dd 0
     ;db 1, 2, 3, 4, 5, 6     ;MAC Address   (big endian)
 MAC_BUFFER_ENTRY    equ 10
 MAC_BUFFER_ENTRIES  equ 0x1000/4
+
+test1: db 0

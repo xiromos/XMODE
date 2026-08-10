@@ -103,15 +103,21 @@ add_udp_header:
     mov bx, 8       ;header size
     call dword [add_ipheader]
 
+    pushf
+
     mov esi, [heap]
     mov ecx, [size]
     mov ah, 0x0b
     int 0x35
 
+    popf
+    jc .error
+
     sti
     clc
     ret
 .error:
+    sti
     stc
     ret
 add_tcp_header:
@@ -119,15 +125,102 @@ add_tcp_header:
 add_arp_header:
     ret
 add_icmp_header:
+    ;AX = Identfier
+    ;ESI = pointer to packet
+    ;ECX = size of packet
+    ;EDX = IPv4 address
+
+    pusha
+    mov edi, esi
+
+    push eax
+    push ecx
+    mov ecx, 0x1000
+    mov ah, 0x0a
+    int 0x35
+    pop ecx
+    pop eax
+
+    ;ESI = allocated memory address
+
+    push edi
+    mov edi, esi
+    pop esi
+
+
+    cld
+    push eax
+    push esi
+    push ecx
+    push edi
+
+    xor eax, eax
+    mov ecx, 0x1000/4
+    rep stosd
+
+    pop edi
+    pop ecx
+
+    push ecx
+    push edi
+
+    add edi, IP_HEADER_SIZE + ETHERNET_HEADER_SIZE
+    rep movsb
+    pop edi
+    pop ecx
+    pop esi
+    pop eax
+
+    ;ESI = pointer to original packet
+    ;EDI = allocated memory address
+
+    push esi
+    mov esi, edi
+    pop edi
+
+    push esi
+    push ecx
+
+    add esi, IP_HEADER_SIZE + ETHERNET_HEADER_SIZE
+    shr ecx, 1      ;/2
+    mov [esi+4], ax
+
+    call compute_rfc1071_checksum
+    mov word [esi+2], ax
+
+    pop ecx
+    pop esi
+
+    push esi
+    mov al, 0x01
+    xor bx, bx
+    call dword [add_ipheader]
+    pop esi
+
+    pushf
+
+    mov ecx, 0x1000
+    mov ah, 0x0b
+    int 0x35
+
+    popf
+    jc .error
+
+    clc
+    popa
     ret
 
+.error:
+    popa
+    stc
+    ret
 process_packet_udp:
     ;ESI = pointer to UDP header in packet
     ;ECX = length of payload + UDP Header
     ;EDX = source IPv4 address
     pusha
-    mov bx, [esi]
-    mov ax, [esi+2]
+    movzx ebx, word [esi]
+    movzx eax, word [esi+2]
     add esi, 8
     call dword [application_packet]
     popa
@@ -135,6 +228,15 @@ process_packet_udp:
 process_packet_tcp:
     ret
 process_packet_icmp:
+    ;ESI = pointer to payload (because ICMP doesnt have a header)
+    ;ECX = length of payload
+    ;EDX = source IPv4 address
+    pusha
+    mov ax, [esi+4]
+    xchg al, ah     ;convert from litle endian to big endian
+    xor ebx, ebx
+    call dword [application_packet]
+    popa
     ret
 process_packet_arp:
     ret
@@ -154,6 +256,40 @@ swap:
     pop ebx
     ret
 
+compute_rfc1071_checksum:
+    ;ESI = pointer to data
+    ;ECX = length to compute (in words)
+    ;Output of Checksum in AX
+    push ecx
+    push edx
+    push esi
+
+    xor eax, eax
+
+.loop:
+    movzx edx, word [esi]
+    xchg dl, dh
+    add eax, edx
+    add esi, 2
+    dec ecx
+    jnz .loop
+
+.check_carry:
+    mov edx, eax
+    shr edx, 16
+    and eax, 0xffff
+    add eax, edx
+    cmp eax, 0xffff
+    ja .check_carry
+
+    not ax      ;invert bits
+    xchg al, ah
+
+    pop esi
+    pop edx
+    pop ecx
+    ret
+
 section .data
 kernel_packet:
     dd 0
@@ -171,3 +307,6 @@ add_ipheader: dd 0
 application_packet: dd 0
 heap: dd 0
 size: dd 0
+
+ETHERNET_HEADER_SIZE    equ 14
+IP_HEADER_SIZE          equ 20
