@@ -1,7 +1,7 @@
 ;=====================================================================
 ;INT 0x33
 ;AH = 0x00: get file information                            input: EDI = pointer to directory, ESI = filename               output: ECX = size, EAX = flags, EBX = first cluster
-;AH = 0x01: get file list of the current directory          input: EDI = buffer for file list                               output: filled buffer with file names
+;AH = 0x01: get file list of the current directory          input: EDI = buffer for file list, ESI = pointer to directory   output: filled buffer with file names
 ;AH = 0x02: read a file into memory                         input: EDI = buffer in memory, ESI = filename                   output: no CF if successful, length of file in ECX
 ;AH = 0x03: write a file to disk                            input: ESI = filename, ECX = filesize (bytes), EDI = buffer     output: CF if error
 ;AH = 0x04: rename a file                                   input: ESI = old filename, EDI = new filename                   output: CF if error
@@ -12,7 +12,7 @@
 ;AH = 0x09: format a drive / partition with FAT16           input: AL  = drive number, BL = partition number (0-3)          output: CF if error
 
 ;AH = 0x0A: load file from not-root directory               input: ESI = file name, EDI = address where to load, EDX = address from where to load (directory), BL = drive number       output: CF if error
-;AH = 0x0B: load file from not-root directory               input: ESI = file name, EDI = where to save (directory cluster), EDX = address from where to load, ECX = length, BL = drive number       output: CF if error
+;AH = 0x0B: save file from not-root directory               input: ESI = file name, EDI = where to save (directory cluster), EDX = address from where to load, ECX = length, BL = drive number       output: CF if error
 ;AH = 0x20: change drive - load MBR of new drive and change parameters      input: ESI = pointer to argument with drive number and partition (eg. 1.1 / 2.3)
 ; Drive Numbers:
 ;     0 = First Floppy
@@ -22,6 +22,7 @@
 ;     ...
 ;     25 = CD
 ;     0xFF = Boot Drive
+; Size of directories are limited to 4KiB
 ;---------------------------------------------------------------------
 ;Copyright (C) 2026 Technodon
 ;=====================================================================
@@ -138,8 +139,6 @@ fs16_handler:
  
 fs16_get_file_list:
     pusha
-    mov esi, root_addr
-    mov dx, [root_entries]
 .loop:
     mov al, [esi]
     cmp al, 0x00
@@ -190,8 +189,7 @@ fs16_get_file_list:
     stosb
 .free_entry:
     add esi, 32
-    dec dx
-    jnz .loop
+    jmp .loop
 .done:
     mov byte [edi], '$'
     popa
