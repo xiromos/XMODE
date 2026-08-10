@@ -11,7 +11,7 @@ gdt_loaded_msg: db '> GDT loaded', 0
 idt_loaded_msg: db '> IDT loaded', 0
 starting_shell_msg: db '> Starting shell...', 0
 interupt_msg: db 'Interupt!', 0
-start_msg: db '< XMODE Shell >', 0x0a,
+start_msg: db '< XiromosX32 Shell >', 0x0a,
            db 'Type "help" for help', 0
 prompt_msg: db '# ', 0
 argument: dd 0
@@ -163,6 +163,8 @@ usb_str: db 'USB', 0
 bgcolor_str: db 'BGCOLOR', 0
 cd_str: db 'CD', 0
 meminfo_str: db 'MEMINFO', 0
+reboot_str: db 'REBOOT', 0
+dhcp_str: db 'DHCP', 0
 command_buffer: db 50 dup(0)
 setbgcolor_helpmsg: db 'Set Background Color.', 0x0a,
                     db 'Usage: ', 0
@@ -356,7 +358,7 @@ ide_running: db 0
 dma_done: db 0
 base_channel: dw 0
 boot_drive: db 0
-cur_bmbase_str: db '< BM Base: ', 0
+cur_bmbase_str: db '< Base Addr: ', 0
 sec_per_cluster: db 0
 reserved_sectors: dw 0
 fat_num: db 0
@@ -378,9 +380,9 @@ program_addr    equ 0x1000000
 program_addr_off equ 0x20000
 dir_str: db '<DIR>', 0
 sys_str: db '<SYS>', 0
-read_buffer: times 13 db 0
-read_buffer2: times 13 db 0
-read_buffer3: times 11 db 0
+read_buffer equ 0x160000    ;times 13 db 0
+read_buffer2: equ 0x161000  ;times 13 db 0
+read_buffer3: equ 0x162000  ;times 11 db 0
 file_buffer     equ 0x20000
 cluster16: dw 0
 first_cluster16: dw 0
@@ -404,6 +406,9 @@ write_prompt: db 'Enter file content (ESC = save):', 0
 disk_changed_str: db 'Drive switched successfully', 0
 disk_changed_err: db 'Error while switching drive. Error code: ', 0
 
+no_dir_str: db 'No such directory', 0
+drive_read_err: db 'Error while reading from the drive', 0
+
 file_test_txt db        "TEST    TXT"
 program_help_bin db     "HELP    BIN"
 shell_task_str db       "SHELL   SYS"
@@ -416,6 +421,11 @@ file_ohci_sys db        "OHCI    SYS"
 file_sb16_sys db        "SB16    SYS"
 file_intl_aud_sys db    "INTL_AUDSYS"
 file_rtl8139_sys db     "RTL8139 SYS"
+dir_network_str db      "NETWORK    "
+file_ip_sys db          "IP      SYS"
+file_protocol_sys db    "PROTOCOLSYS"
+file_dhcp_sys db        "DHCP    SYS"
+dot_dot_entry db        "..         "
 
 CONFIG_DIR_BUFFER equ   0x20000
 CONFIGS_FILE_BUFFER equ 0x20500
@@ -499,3 +509,58 @@ wavfile_functions: dd 0
 ;+12: pause playing of current WAV file
 ;+16: resume playing of current WAV file
 ;+20: end playing current WAV file
+
+
+;network
+ip_packet:
+    dd 0
+    dd 0
+    times 3 dw 0
+    dw 0
+
+
+;global structure
+NET_INTERFACE       equ 0x8c000
+;+0: IPv4 address
+;+4: DNS server
+;+8: gateway IP
+;#### sending a packet
+;+12: transmit_packet()     (driver)
+;+16: add_ipheader()        (IP)
+;+20: add_udp_header()           (protocol)
+;+24: add_tcp_header()           (protocol)
+;+28: add_arp_header()           (protocol)
+;+32: add_icmp_header()          (protocol)
+;#### receiving a packet
+;+36: process_packet_ip()        (IP)
+;+40: process_packet_udp()       (protocol)
+;+44: process_packet_tcp()       (protocol)
+;+48: process_packet_icmp()      (protocol)
+;+52: process_packet_arp()       (protocol)
+;+56: application_packet()       (api)
+;+60: Subnet Mask
+net_active: db 0        ;global variable which indicates if programs can use network or not
+
+packet_stats:
+    dd 0    ;pointer to variable transmit_error_count
+    dd 0    ;pointer to variable transmit_success_count
+    dd 0    ;pointer to variable receive_error_count
+    dd 0    ;pointer to variable receive_success_count
+
+
+sleep_timers_list: dd 0x8b000
+max_sleep_timers: dd 0x1000/8
+counters_list: dd 0x8d000
+max_counters: dd 0x1000/8
+
+; sleep_timer_struct:
+;     dw 0                ;PID
+;     dw 0                ;padding
+;     dd target_tick      ;when does the timer stops (value, set by program + system_tick)
+
+; counters_struct:
+;     dd pointer_to_variable      ;variable will be increased by 1 every 1ms
+;     dd max_value                ;value_from_program+system_tick, if this value is equal with the value from [pointer_to_variable]+system_tick then this timer gets deleted
+
+system_tick: dd 0         ;global tick value
+    
