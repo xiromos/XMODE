@@ -190,6 +190,9 @@ exec_cmd:
 .init_dhcp:
     cmp byte [.dhcp], 1
     je .dhcp_error
+    cmp byte [net_stack_loaded], 1
+    jne .no_network
+    mov byte [net_active], 1
 
     mov ah, 0x03
     mov ebx, [load_network_stack.heap]
@@ -208,6 +211,9 @@ exec_cmd:
 ;     cmp eax, 0
 ;     je .wait_ip
 
+    xor ah, ah
+    int 0x31
+
     mov byte [.dhcp], 1
     ret
 
@@ -216,8 +222,15 @@ exec_cmd:
     mov ebx, COLOR_RED
     call print_string
     ret
+.no_network:
+    mov esi, .no_net_str
+    mov ebx, COLOR_RED
+    call print_string
+    ret
+    ret
 .dhcp: db 0
 .dhcp_error_str: db 'Error: DHCP Request already sent', 0x0a, 0
+.no_net_str: db 'Error: No network connection', 0x0a, 0
 .osdev_dc:
     mov esi, osdev_discord_msg
     mov ebx, 0x00ffffff
@@ -364,6 +377,26 @@ exec_cmd:
 .bgcolor_error_str: db 'Error while saving backgroundcolor at /XCONFIGS/BGCOLOR.CFG', 0x0a, 0
 .configs_cluster: dw 0
 
+    ;########################################################
+    ;function which copies something null-terminated from ESI
+    ;into the buffer of EDI and stores its length in ECX
+.copy_arg:
+    ;ESI = pointer to null-terminated argument
+    ;EDI = pointer to buffer
+    ;ECX = 0
+
+    lodsb
+    cmp al, 0
+    je .done_copy_arg
+    inc ecx
+    stosb
+    jmp .copy_arg
+.done_copy_arg:
+    stosb
+    ret
+
+    ;function to fill argument buffer with 0xff
+    ;to mark it as empty for the program
 .clear_arg_buffer:
     mov edi, read_buffer2
     mov eax, 0xffffffff
@@ -373,11 +406,21 @@ exec_cmd:
     mov edi, command_buffer
     mov ecx, 11
     jmp .prep_buffer
+
 .exec_program:
+    ;check if there was an argument given
     mov esi, [argument]
     cmp esi, 0xffffffff
     je .clear_arg_buffer
 
+    ;copy argument 1:1 into read_buffer3 to save it
+    mov edi, read_buffer3
+    xor ecx, ecx
+    push esi
+    call .copy_arg
+    pop esi
+
+    ;parse argument into FAT 8.3 format
     mov edi, read_buffer2
     xor ecx, ecx
     call parse_arg_loop
@@ -434,6 +477,11 @@ exec_cmd:
     mov esi, read_buffer
     mov edi, read_buffer
     mov ebx, [cur_dir_addr]
+
+    mov ecx, read_buffer3
+    mov edx, 0xffffffff     ;second argument is not yet supported
+    mov ebp, 0xffffffff     ;other arguments are not yet supported
+
     mov ah, 0x02
     int 0x35
     jc .program_error
@@ -479,6 +527,7 @@ exec_cmd:
 .list_files:
     mov ah, 0x01
     mov edi, file_buffer
+    mov esi, [cur_dir_addr]
     int 0x33
 
     call print_newline
@@ -1803,6 +1852,190 @@ show_usb_devices:
     ret
 
 cd_directory:
+    mov esi, [argument]
+    call string_uppercase
+
+    cmp [esi], '/'
+    je .root
+    cmp [esi], '-'
+    je .dir_back
+
+.loop:
+    mov edi, .dir_buffer
+    call get_dir_name
+
+    mov ebp, ecx
+
+    push esi
+    xor ah, ah
+    mov edi, [cur_dir_addr]
+    mov esi, .dir_buffer
+    mov bl, [drive_number]
+    int 0x33
+    pop esi
+    jc .error
+
+    test al, (1 << 4)
+    jz .error
+
+    push esi
+    mov ecx, 0x1000     ;directories are limitied to 4Kib in size
+    mov ah, 0x0a
+    int 0x35
+
+    mov ah, 0x0a
+    mov edi, esi
+    mov esi, .dir_buffer
+    mov edx, [cur_dir_addr]
+    mov bl, [drive_number]
+    int 0x33
+    pop esi
+    jc .drive_error
+
+    cmp dword [cur_dir_addr], 0
+    je .skip_free
+
+    push esi
+    mov esi, [cur_dir_addr]
+    mov ah, 0x0b
+    int 0x35
+    pop esi
+
+.skip_free:
+    mov [cur_dir_addr], edi
+    add esi, ebp
+
+    lodsb
+    mov ah, al
+
+    lodsb
+    cmp al, 0
+    je .done
+    
+    dec esi
+    cmp ah, '/'
+    je .loop
+.done:
+    ret
+
+.root:
+    push esi
+    mov esi, [cur_dir_addr]
+    cmp esi, 0
+    je .skip_free2
+
+    mov ecx, 0x1000
+    mov ah, 0x0b
+    int 0x35
+.skip_free2:
+    pop esi
+    mov dword [cur_dir_addr], 0
+    add esi, 1
+    cmp byte [esi], 0
+    jne .loop
+
+    ret
+
+.dir_back:
+    cmp dword [cur_dir_addr], 0
+    je .done
+    
+    mov esi, dot_dot_entry
+    mov edi, [cur_dir_addr]
+    xor ah, ah
+    mov bl, [drive_number]
+    int 0x33
+    jc .drive_error
+
+    mov ecx, 0x1000     ;directories are limited to 4KiB
+    mov ah, 0x0a
+    int 0x35
+
+    mov edi, esi
+    mov esi, dot_dot_entry
+    mov edx, [cur_dir_addr]
+    mov bl, [drive_number]
+    mov ah, 0x0a
+    int 0x33
+    jc .drive_error
+
+    push edi
+    mov esi, [cur_dir_addr]
+    mov ecx, 0x1000
+    int 0x35
+    pop edi
+
+    mov [cur_dir_addr], edi
+    jmp .done
+.error:
+    mov esi, .dir_buffer
+.error_loop:
+    lodsb
+    cmp al, 0x20
+    je .done_parse
+    cmp al, 0
+    je .done_parse
+    jmp .error_loop
+.done_parse:
+    dec esi
+    mov byte [esi], 0
+    
+    mov esi, .dir_buffer
+    mov ebx, 0x00ffffff
+    call print_string
+
+    mov al, ':'
+    call print_char
+    mov al, ' '
+    call print_char
+
+    mov esi, no_dir_str
+    mov ebx, 0x00ffffff
+    call print_string
+    call print_newline
+
+    ret
+.drive_error:
+    mov esi, drive_read_err
+    mov ebx, COLOR_RED
+    call print_string
+    call print_newline
+    ret
+.dir_buffer: times 12 db 0
+get_dir_name:
+    ;expects an string like 'DIR1/DIR2/TESTDIR', 0 and copies the first name into an buffer
+    ;ESI = pointer directory name, which terminates with 0 or '/'
+    ;EDI = pointer to 11B buffer
+    ;Output: ECX = length of directory name
+    push esi
+    push eax
+    push edi
+
+    mov al, 0x20
+    mov ecx, 11
+    rep stosb
+
+    pop edi
+    push edi
+
+    xor ecx, ecx
+.loop:
+    lodsb
+    cmp al, 0
+    je .done
+    cmp al, '/'
+    je .done
+
+    inc ecx
+    cmp ecx, 11
+    jae .done
+
+    stosb
+    jmp .loop
+.done:
+    pop edi
+    pop eax
+    pop esi
     ret
 
 show_memory_info:
