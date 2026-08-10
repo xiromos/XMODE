@@ -23,12 +23,13 @@ start:
     cmp dword [esi], 0xffffffff
     je .show_help
 
+    mov edi, file_buffer
+    call parse_filename
 
     xor ah, ah
+    mov esi, file_buffer
     xor edi, edi
     int 0x33
-
-    push esi
 
     mov [size], ecx
     mov ah, 0xc
@@ -37,7 +38,7 @@ start:
     mov [heap], esi
     mov edi, esi
     xor edx, edx
-    pop esi
+    mov esi, file_buffer
     mov ah, 0x0a
     mov bl, 0xff
     int 0x33
@@ -122,6 +123,56 @@ start:
 .done2:
     mov ah, 0x05
     int 0x35
+
+
+
+parse_filename:
+    pusha
+    xor ecx, ecx
+.loop:
+    mov al, [esi]
+    cmp al, 0       ;check for 0-terminator
+    je .add_spaces     ;invalid string
+    cmp al, '.'     ;chech for extension
+    je .add_spaces
+    stosb           ;stores al in EDI
+    inc esi
+    inc ecx
+    cmp ecx, 8
+    jnz .loop
+.add_spaces:
+    cmp ecx, 8
+    je .parse_ext
+    mov al, ' '     ;fill the rest of the name with spaces to achieve 8.3 format
+    stosb
+    inc ecx
+    jmp .add_spaces
+.parse_ext:
+    cmp byte [esi], '.'
+    jne .parse_ext_loop
+    inc esi
+.parse_ext_loop:
+    xor ecx, ecx
+.loop2:
+    mov al, [esi]
+    cmp al, 0
+    je .add_spaces_ext
+    stosb
+    inc esi
+    inc ecx
+    cmp ecx, 3
+    jb .loop2
+.add_spaces_ext:
+    cmp ecx, 3
+    je .done
+    mov al, ' '
+    stosb
+    inc ecx
+    jmp .add_spaces_ext
+.done:
+    popa
+    ret
+
 section .data
 heap: dd 0
 size: dd 0
@@ -141,3 +192,4 @@ help_msg:
     db '-c: cancel play of WAV file', 0x0a,
     db '-h: show this message', 0x0a, 0
 COLOR_RED       equ 0xbf0d0d
+file_buffer: times 12 db 0
