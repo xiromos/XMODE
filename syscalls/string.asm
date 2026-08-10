@@ -26,6 +26,34 @@ string_uppercase:
     popa
     ret
 
+string_lowercase:
+;   Input:
+;   ESI = pointer to null-terminated string
+;
+;   Output:
+;   ESI = pointer to edited string
+    pusha
+    mov edi, esi
+.loop:
+    lodsb
+    cmp al, 0
+    je .done
+
+    cmp al, 0x41
+    jb .next
+
+    cmp al, 0x61
+    ja .next
+
+    add al, 0x20
+.next:
+    stosb
+    jmp .loop
+.done:
+    stosb
+    popa
+    ret
+
 
 string_to_hex6:
 ;   Input:
@@ -82,4 +110,28 @@ string_to_hex6:
     pop ecx
     pop ebx
     pop eax
+    ret
+
+
+bcd_convert_byte:
+    ;AL = hex number
+    ;Output: AL = decimal number
+    ;Example:
+    ;   before: EAX = 0x59
+    ;   after: EAX = 59
+    
+    push ebx
+    push ecx
+
+    mov bl, al
+    shr al, 4
+    mov cl, 10
+    mul cl
+    xor ah, ah
+
+    and bl, 0x0f
+    add al, bl
+
+    pop ecx
+    pop ebx
     ret
