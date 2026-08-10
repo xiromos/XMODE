@@ -238,7 +238,14 @@ main:
     or ecx, PAGE_PRESENT | PAGE_RW | PAGE_CACHE_DIS | PAGE_USER
     call map_region
 
+    mov eax, rtc_handler
+    mov ebx, 0x28
+    call set_idt_entry
+
+    call init_rtc
+
     sti
+
     mov eax, [frame_buffer]
     mov [cur], eax
     mov dword [bgcolor], 0x0014c4be
@@ -619,6 +626,8 @@ scan_disk_pci:
 
     stosd
 
+    push eax
+
     mov ecx, ebx
     mov eax, ebx
     or eax, 0x08
@@ -627,6 +636,9 @@ scan_disk_pci:
     stosd
     mov byte [edi], 0x0a
     inc edi
+
+    pop edx
+    ;DX = vendors...
 
     mov ebx, eax
     mov eax, ecx
@@ -1217,6 +1229,85 @@ map_region:
     add edi, 4
     ret
 
+; #### configure Realtime Clock ###
+init_rtc:
+    mov dx, 0x70
+    mov al, 0x8a
+    out dx, al
+
+    ;little delay
+    nop
+    nop
+    nop
+    nop
+
+    mov dx, 0x71
+    in al, dx
+    mov bl, al
+
+    mov dx, 0x70
+    mov al, 0x8a
+    out dx, al
+
+    mov al, RTC_DIVISOR
+    and bl, 0xf0
+    or bl, al
+    mov al, bl
+
+    mov dx, 0x71
+    out dx, al
+
+
+    mov dx, 0x70
+    mov al, 0x8b
+    out dx, al
+
+    nop
+    nop
+    nop
+    nop
+
+    mov dx, 0x71
+    in al, dx
+    or al, (1 << 6)     ;activate periodic interrupts
+
+    push ax
+
+    mov dx, 0x70
+    mov al, 0x8b
+    out dx, al
+
+    pop ax
+
+    nop
+    nop
+    nop
+    nop
+
+    mov dx, 0x71
+    out dx, al
+
+    mov dx, 0x70
+    mov al, 0x0c
+    out dx, al
+
+    nop
+    nop
+
+    mov dx, 0x71
+    in al, dx
+
+    mov edi, [sleep_timers_list]
+    mov ecx, 0x1000/4
+    xor eax, eax
+    rep stosd
+
+    mov edi, [counters_list]
+    mov ecx, 0x1000/4
+    xor eax, eax
+    rep stosd
+
+    ret
 
 load_drivers:
     ;load drivers directory
@@ -1406,6 +1497,16 @@ load_drivers:
     add esi, 32
     mov ecx, 6
     rep movsb
+
+    ; mov edi, [edx+12]
+    ; mov [packet_stats], edi
+    ; mov edi, [edx+16]
+    ; mov [packet_stats+4], edi
+    ; mov edi, [edx+20]
+    ; mov [packet_stats+8], edi
+    ; mov edi, [edx+24]
+    ; mov [packet_stats+12], edi
+
 
     mov byte [net_card_found], 1
 .skip_rtl8139:
@@ -1608,7 +1709,8 @@ load_network_stack:
     ;execute PROTOCOL.OBJ second time
     mov ebx, NET_INTERFACE
     call dword [.protocolobj_addr]
-    mov byte [net_active], 1
+    mov byte [net_active], 0
+    mov byte [net_stack_loaded], 1
     popa
     clc
     ret
@@ -1656,7 +1758,9 @@ rtl8139_found: db 0
 rtl8139_base: dd 0
 rtl8139_irq: db 0
 net_card_found: db 0
-PIT_DIVISOR     equ 0x2e9c          ;10ms 
+net_stack_loaded: db 0
+PIT_DIVISOR     equ 0x2e9c          ;10ms
+RTC_DIVISOR     equ 0x06            ;interrupt every 0,976ms
 ;memory map
 ;0x0000 - 0x4000:      root directory
 ;0x4000 - 0x7c00:      FAT
