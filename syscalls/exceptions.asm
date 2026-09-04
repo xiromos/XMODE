@@ -35,6 +35,12 @@ int0x1:
     hlt
 
 int0x6:
+    pop eax
+    pop ebx
+    pop ecx
+    pop edx
+    cli
+    hlt
     pusha
     mov ebx, [cur_x]
     mov ecx, [cur_y]
@@ -88,6 +94,12 @@ int0x08:
     add dword esp, 1
     iret
 int0xd:
+    pop eax
+    pop ebx
+    pop ecx
+    pop edx
+    cli
+    hlt
     pusha
     mov ebx, [cur_x]
     mov ecx, [cur_y]
@@ -248,6 +260,8 @@ irq0_handler:
     mov ax, 1
     mov edi, tasks_esp+TASK_SIZE    ;EDI points to shell task
 
+    ; mov ax, 0
+    ; mov edi, tasks_esp              ;EDI points to idle task
 .load_next:
     ;check attributes
     cmp dword [edi+11], 0
@@ -735,38 +749,79 @@ ahci_interrupt_handler:
     test ebx, ebx
     jz .done                ;interrupt did not came from the AHCI controller
 
-    mov [eax+8], ebx        ;quit interrupt
 
-    mov ebx, [eax+8]        ;IS
     ;check which port interrupted... (bit 1 set = port 1, bit 2 set = port 2,...)
-    mov [eax+8], ebx
-
-    mov esi, ahci_device_list_addr
-    mov dx, [ahci_devices]
+    xor ecx, ecx
 .loop:
-    mov eax, [esi+4]        ;port address
-    mov ebx, [eax+0x10]     ;IS
-    mov [eax+0x10], ebx
+    cmp ecx, 32
+    jae .done
 
-    add esi, AHCI_PORT_ENTRY_SIZE
-    dec dx
-    jnz .loop
+    bt ebx, ecx
+    jnc .next
+
+    mov edi, eax
+    add edi, 0x100
+    mov edx, ecx
+    imul edx, 0x80
+    add edi, edx
+
+    mov edx, [edi+0x10]
+    mov [edi+0x10], edx
+
+    mov edx, [edi+0x34]
+    xor ebx, ebx
+.loop2:
+    bt edx, ebx
+    jc .next2
+
+    mov esi, ecx    ;port
+    imul esi, AHCI_PORT_MEM_OFF
+    add esi, AHCI_MEM_BASE
+    add esi, AHCI_TASK_STRUCT_OFF
+
+    push ecx
+    mov ecx, ebx
+    imul ecx, 2
+    add esi, ecx
+    pop ecx
+
+    cmp word [esi], 0
+    je .next2
+
+    push eax
+    movzx eax, word [esi]
+    imul eax, TASK_SIZE
+    add eax, tasks_esp
+    mov dword [eax+11], 0   ;remove sleeping flag
+    mov word [esi], 0       ;clear PID
+    pop eax
+.next2:
+    inc ebx
+    cmp ebx, 32
+    jb .loop2
+
+    mov edx, 1
+    shl edx, ecx
+    mov [eax+0x08], edx
+.next:
+    inc ecx
+    jmp .loop
 
 .done:
     popa
+    sti
     ret
 
 ohci_interrupt_handler:
     cli
     pusha
-
     mov eax, [ohci_base]
     mov ebx, [eax+12]       ;interrupt status
     test ebx, (1 << 1)
     jz .done                ;no WDH
-    or ebx, (1 << 1)
-    ;mov ebx, (1 << 1)      ;clear only WDH
-    mov [eax+12], ebx
+    ; test ebx, (1 << 31)
+    ; jz .done
+    mov dword [eax+12], (1 << 1)
 
     ; test ebx, 2
     ; jz .skip_keyboard
@@ -779,7 +834,7 @@ ohci_interrupt_handler:
     je .keyboard
     cmp bl, 3
     je .usb_stick
-    jmp .keyboard
+    ;jmp .keyboard
     jmp .done
 
     ; mov ebx, td_empty
