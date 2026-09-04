@@ -22,7 +22,20 @@ get_ohci_devices:
     test edi, 1
     jnz .wait_reset_end
 
+    mov dword [eax+0x14], (1 << 31)     ;Master Interrupt Disable
+
     mov edi, hcca
+
+    push edi
+    push ecx
+    push eax
+    xor eax, eax
+    mov ecx, 0x1000
+    rep stosd
+    pop eax
+    pop ecx
+    pop edi
+
     mov [eax+0x18], edi     ;set Host Controller Communications Area
     
     ; mov ecx, 0x80000002     ;set Bit 1 and Bit 31 (Writeback Done Head & Master Interrupt Enable)
@@ -48,6 +61,7 @@ get_ohci_devices:
     dec ecx
     jnz .loop
 .done:
+    mov dword [eax+12], 0xffffffff  ;clear interrupt status
     mov ecx, 0x80000002     ;set Bit 1 and Bit 31 (Writeback Done Head & Master Interrupt Enable)
     mov [eax+0x10], ecx     ;InterruptEnable
 
@@ -58,9 +72,13 @@ get_ohci_devices:
 
     mov al, [usb_keyboard_used]
     mov ah, [usb_devices]
-    mov edx, usb_keyboard_buffer        ;return pointer of keyboard buffer
+    mov ebx, usb_keyboard_buffer        ;return pointer of keyboard buffer
     mov esi, usb_keyboard_ed
     mov edi, usb_keyboard_td
+    
+    mov dword [kernel_packet], usb_read_sectors
+    mov dword [kernel_packet+4], usb_write_sectors
+    mov edx, kernel_packet
     clc
     ret
 
@@ -86,8 +104,8 @@ init_ohci_port:
 
     ;set controller into operational mode
     mov edi, [eax+4]
-    and edi, 0xbf               ;rm Bit 6
-    or edi, 128                 ;set Bit 7 (set operational mode)
+    and edi, ~(1 << 6)               ;rm Bit 6
+    or edi, (1 << 7)                 ;set Bit 7 (set operational mode)
     mov [eax+4], edi
 
     mov dword [esi], 2          ;set bit 1 (PortEnable)
@@ -415,10 +433,12 @@ init_ohci_port:
 
 
 .hid_keyboard:
+    push esi
     mov esi, USB_DEVICE_LIST
     add esi, dword [usb_list_offset]
     mov dword [esi], 1
     add dword [usb_list_offset], USB_LIST_OFF
+    pop esi
 
     ;GET ENDPOINT DESCRIPTOR
     mov edi, ohci_descriptor_buffer
@@ -458,8 +478,12 @@ init_ohci_port:
 
     or edx, (1 << 12)       ;set direction
 .direction_out:
-    or edx, (1 << 13)       ;set Low Speed
+    and edx, ~(1 << 13)
+    test dword [esi], (1 << 9)
+    jz .full_speed
 
+    or edx, (1 << 13)       ;set Low Speed
+.full_speed:
     movzx ecx, word [edi+4]
     shl ecx, 16
     or edx, ecx
@@ -477,9 +501,10 @@ init_ohci_port:
 
     ;SET TD
     xor edx, edx
-    or edx, (2 << 19)       ;direction: IN
-    or edx, (2 << 24)       ;toggle CARRY
-    or edx, (15 << 28)      ;set status - not accessed
+    ;or edx, (2 << 19)                      ;direction: IN
+    ;and edx, ~(1 << 24) | ~(1 << 25)       ;toggle CARRY
+    or edx, (1 << 25)                      ;DATA0
+    or edx, (15 << 28)                     ;set status - not accessed
     mov [usb_keyboard_td], edx
 
     mov edx, usb_keyboard_buffer
@@ -1120,8 +1145,8 @@ align 16
 
 ;====data====
 ohci_base: dd 0
-hcca                    equ 0x102500              ;Host Controller Communications Area, offset 9472B (after 1. AHCI Port Memory Data)
-USB_DEVICE_LIST         equ 0x105500              ;offset 21760B (after 2. AHCI Port Memory Data)
+hcca                    equ 0x162500              ;Host Controller Communications Area
+USB_DEVICE_LIST         equ 0x163000
 USB_LIST_OFF            equ 40
 
 align 16
@@ -1151,6 +1176,7 @@ usb_keyboard_td:
     times 4 dd 0
     db 1    ;keyboard
 
+align 16
 ohci_setup_packet:
     db 0x80          ; Device to Host
     db 0x06          ; GET_DESCRIPTOR
@@ -1170,7 +1196,7 @@ usb_keyboard_used: db 0
 usb_list_offset: dd 0
 
 usb_devices: db 0
-
+low_speed: db 0
 
 align 16
 bulk_in_ed: times 4 dd 0
